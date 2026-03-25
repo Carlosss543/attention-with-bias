@@ -1,4 +1,8 @@
 __pycache__/
+attention_maps/
 data/
+training_checkpoints/
 wandb_logs/
+
 architecture_vit.txt
+augmented_images.png

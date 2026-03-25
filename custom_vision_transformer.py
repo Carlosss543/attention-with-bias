@@ -10,7 +10,6 @@ from torchvision.models._meta import _IMAGENET_CATEGORIES
 from torchvision.models._utils import _ovewrite_named_param, handle_legacy_interface
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 __all__ = [
@@ -82,10 +81,15 @@ class AttentionWithBias(nn.Module):
         self.num_heads = num_heads
         self.head_dim = hidden_dim // num_heads
         self.scale = self.head_dim ** -0.5
+
         self.qkv = nn.Linear(hidden_dim, hidden_dim * 3)
         self.b = nn.Linear(hidden_dim, num_heads) # learned bias
         self.out_proj = nn.Linear(hidden_dim, hidden_dim) # final projection after concatenating heads
         self.dropout = nn.Dropout(dropout)
+
+        # initialize bias to 0 so that the model starts with classic attention and can learn to use the bias if needed
+        nn.init.zeros_(self.b.weight)
+        nn.init.zeros_(self.b.bias)
 
     def forward(self, x):
         B, T, C = x.shape
@@ -101,7 +105,7 @@ class AttentionWithBias(nn.Module):
         # ---- Learned Bias ----
         b = self.b(x)  # (B, T, H)
         b = b.permute(0, 2, 1) # (B, H, T)
-        b = b.unsqueeze(-1) # (B, H, T, 1)
+        b = b.unsqueeze(-2) # (B, H, 1, T)
 
         # ---- Add Bias ----
         attn = attn + b
@@ -115,7 +119,7 @@ class AttentionWithBias(nn.Module):
         out = out.transpose(1, 2).reshape(B, T, C) # (B, T, C)
         out = self.out_proj(out)
 
-        return out
+        return out, attn
 
 
 class EncoderBlock(nn.Module):
@@ -151,7 +155,7 @@ class EncoderBlock(nn.Module):
         torch._assert(input.dim() == 3, f"Expected (batch_size, seq_length, hidden_dim) got {input.shape}")
         x = self.ln_1(input)
         if self.attention_bias:
-            x = self.self_attention(x)
+            x, _ = self.self_attention(x)
         else:
             x, _ = self.self_attention(x, x, x, need_weights=False)
         x = self.dropout(x)
