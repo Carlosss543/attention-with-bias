@@ -17,13 +17,14 @@ if params.alpha < 1.0: # only load teacher model if we need it for the distillat
     teacher_model = vit_b_16(weights=ViT_B_16_Weights.IMAGENET1K_V1).to(device)
     teacher_model.eval()
 else:
-    teacher_model = None # dummy variable since we won't use the teacher model when alpha=1.0
+    teacher_model = None # dummy variable
 
 
 # --- load model ---
 attention_bias = False
 model = vit_custom_16(num_classes=params.num_classes, attention_bias=attention_bias).to(device)
 save_checkpoints = False
+print(f"Custom ViT number of parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.4f}M")
 
 
 # --- load data and get mask for filtering indices that are not in imagenette ---
@@ -41,13 +42,13 @@ run = wandb.init(
     dir="./wandb_logs",
     config={
         "model_type": "vit_custom_16",
-        "dataset": "Imagenette",
+        "dataset": params.dataset_name,
         "batch_size": params.batch_size,
         "learning_rate": params.learning_rate,
         "alpha": str(params.alpha),
         "attention_bias": str(attention_bias),
     },
-    mode="online"  # online/disabled
+    mode="disabled"  # online/disabled
 )
 
 
@@ -62,5 +63,5 @@ for epoch in tqdm(range(1, params.num_epochs + 1), desc="Epochs"):
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
         }
-        torch.save(model.state_dict(), f"./training_checkpoints/vit_custom_16_epoch_{epoch}.pth")
+        torch.save(checkpoint, f"./training_checkpoints/vit_custom_16_epoch_{epoch}.pth")
         print(f"Checkpoint epoch {epoch} sauvegardé.")
