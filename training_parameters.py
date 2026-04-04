@@ -1,7 +1,9 @@
-batch_size = 128
+batch_size = 256
 img_size = 224
 num_classes = 100
-num_epochs = 60
-learning_rate = 5e-5
+num_epochs = 50
+learning_rate = 3e-4
 alpha = 1.0  # weight for distillation loss (between 0 and 1)
 dataset_name = "Imagenet100"
+num_train_samples = 130_000
+num_val_samples = 5_000

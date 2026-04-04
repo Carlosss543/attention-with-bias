@@ -6,7 +6,6 @@ import torch.nn.functional as F
 from tqdm import tqdm
 import wandb
 import training_parameters as params
-import time
 
 
 def get_data_loaders(batch_size, img_size, device):
@@ -39,7 +38,7 @@ def get_data_loaders(batch_size, img_size, device):
         .map_tuple(val_transform, lambda x: int(x))
     )
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, num_workers=6, pin_memory=True, prefetch_factor=4)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, num_workers=3, pin_memory=True)
 
     # create a mask for filtering indices that are not present
@@ -79,42 +78,38 @@ def distillation_loss(student_logits, teacher_logits, labels, T=4.0, alpha=0.5):
     return loss
 
 
-def train_one_epoch(train_loader, model, teacher_model, optimizer, device, alpha, mask, num_classes):
+def train_one_epoch(train_loader, model, teacher_model, optimizer, device, alpha, mask, scaler, scheduler, log_interval=10):
     model.train()
     total_loss = 0.0
     total_correct = 0
     total_samples = 0
 
-    torch.cuda.synchronize()
-    t0 = time.time()
-    for imgs, labels in tqdm(train_loader, total=130_000//params.batch_size, desc="Training", leave=False):
-        imgs, labels = imgs.to(device), labels.to(device)
-        torch.cuda.synchronize()
-        t1 = time.time()
-        data_time = t1 - t0
+    for batch_idx, (imgs, labels) in enumerate(tqdm(train_loader, total=params.num_train_samples//params.batch_size, desc="Training", leave=False)):
+        imgs, labels = imgs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
 
-        # --- teacher forward pass, compute only if we need them for the distillation loss and else put dummy tensor ---
-        with torch.no_grad():
-            teacher_outputs = teacher_model(imgs)[:, mask] if params.alpha < 1.0 else torch.zeros((imgs.size(0), params.num_classes), device=device)
-
-        output = model(imgs)
-        loss = distillation_loss(output, teacher_outputs, labels, alpha=alpha)
+        with torch.amp.autocast('cuda'):
+            output = model(imgs)
+            if alpha < 1.0:
+                with torch.no_grad():
+                    teacher_outputs = teacher_model(imgs)[:, mask]
+                loss = distillation_loss(output, teacher_outputs, labels, alpha=alpha)
+            else:
+                loss = F.cross_entropy(output, labels)
 
         optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        optimizer.step()
-
-        torch.cuda.synchronize()
-        t2 = time.time()
-        compute_time = t2 - t1
-        print(f"Data load time: {data_time:.3f}s, Compute time: {compute_time:.3f}s")
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        scheduler.step()
 
         total_loss += loss.item() * imgs.size(0)
         total_correct += (output.argmax(dim=1) == labels).sum().item()
-        total_samples += labels.size(0) 
+        total_samples += labels.size(0)
 
-        torch.cuda.synchronize()
-        t0 = time.time()
+        # send batch loss to W&B occasionally
+        if (batch_idx + 1) % log_interval == 0:
+            current_lr = optimizer.param_groups[0]['lr']
+            wandb.log({"batch_train_loss": loss.item(), "learning_rate": current_lr})
 
     avg_loss = total_loss / total_samples
     avg_acc = total_correct / total_samples
@@ -122,20 +117,23 @@ def train_one_epoch(train_loader, model, teacher_model, optimizer, device, alpha
     wandb.log({"train_loss": avg_loss, "train_acc": avg_acc})
 
 
-def val_one_epoch(val_loader, model, teacher_model, device, alpha, mask, num_classes):
+def val_one_epoch(val_loader, model, teacher_model, device, alpha, mask):
     model.eval()
     total_loss = 0.0
     total_correct = 0
     total_samples = 0
-    with torch.no_grad():
-        for imgs, labels in tqdm(val_loader, total=5_000//params.batch_size, desc="Validation", leave=False):
-            imgs, labels = imgs.to(device), labels.to(device)
-            
-            with torch.no_grad():
-                teacher_outputs = teacher_model(imgs)[:, mask] if params.alpha < 1.0 else torch.zeros((imgs.size(0), params.num_classes), device=device)
 
-            output = model(imgs)
-            loss = distillation_loss(output, teacher_outputs, labels, alpha=alpha)
+    with torch.no_grad():
+        for imgs, labels in tqdm(val_loader, total=params.num_val_samples//params.batch_size, desc="Validation", leave=False):
+            imgs, labels = imgs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
+
+            with torch.amp.autocast('cuda'):
+                output = model(imgs)
+                if alpha < 1.0:
+                    teacher_outputs = teacher_model(imgs)[:, mask]
+                    loss = distillation_loss(output, teacher_outputs, labels, alpha=alpha)
+                else:
+                    loss = F.cross_entropy(output, labels)
 
             total_loss += loss.item() * imgs.size(0)
             total_correct += (torch.argmax(output, dim=1) == labels).sum().item()

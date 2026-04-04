@@ -3,7 +3,7 @@ import tarfile
 import random
 from tqdm import tqdm
 
-set_type = "train"
+set_type = "train" # mettre "train" ou "val" selon le dataset à traiter
 
 input_dir = f"data/imagenet100/{set_type}"
 output_dir = f"data/imagenet100_shards/{set_type}"
@@ -13,10 +13,9 @@ os.makedirs(output_dir, exist_ok=True)
 
 # 1️⃣ Créer une liste globale (image_path, class_idx)
 all_samples = []
-for class_idx, class_name in enumerate(sorted(os.listdir(input_dir))):
+class_dirs = [d for d in sorted(os.listdir(input_dir)) if os.path.isdir(os.path.join(input_dir, d))]
+for class_idx, class_name in enumerate(class_dirs):
     class_path = os.path.join(input_dir, class_name)
-    if not os.path.isdir(class_path):
-        continue
     for img_name in os.listdir(class_path):
         img_path = os.path.join(class_path, img_name)
         all_samples.append((img_path, class_idx))
