@@ -1,145 +1,124 @@
-import webdataset as wds
-from torchvision import transforms
+from torchvision import transforms, datasets
 from torch.utils.data import DataLoader
 import torch
-import torch.nn.functional as F
 from tqdm import tqdm
 import wandb
+from torchvision.transforms.functional import InterpolationMode
+import matplotlib.pyplot as plt
+from mixup_cutmix import get_mixup_cutmix
 import training_parameters as params
+from torch.utils.data.dataloader import default_collate
 
 
-def get_data_loaders(batch_size, img_size, device):
+def get_data_loaders(batch_size):
+
+    mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]  # mean and std for ImageNet
 
     train_transform = transforms.Compose([
-        transforms.RandomResizedCrop(img_size, scale=(0.8, 1.0)),
+        transforms.RandomResizedCrop(params.crop_size, interpolation=InterpolationMode.BILINEAR, antialias=True),
+        # transforms.RandomResizedCrop(params.crop_size, interpolation=InterpolationMode.BILINEAR, antialias=True, scale=(0.8, 1.0)),
         transforms.RandomHorizontalFlip(),
+        transforms.RandAugment(interpolation=InterpolationMode.BILINEAR, num_ops=2, magnitude=9),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) # mean and std for ImageNet
+        transforms.Normalize(mean=mean, std=std)
     ])
 
     val_transform = transforms.Compose([
-        transforms.Resize((img_size, img_size)),
+        transforms.Resize(params.resize_size, interpolation=InterpolationMode.BILINEAR, antialias=True),
+        transforms.CenterCrop(params.crop_size),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        transforms.Normalize(mean=mean, std=std)
     ])
 
-    train_dataset = (
-        wds.WebDataset("data/imagenet100_shards/train/train-{000000..000064}.tar", shardshuffle=10)
-        .shuffle(1000)  # shuffle buffer
-        .decode("pil")
-        .to_tuple("jpg", "cls")
-        .map_tuple(train_transform, lambda x: int(x))
-    )
+    train_dataset = datasets.ImageFolder("data/imagenet100/original_dataset/train", transform=train_transform)
+    val_dataset = datasets.ImageFolder("data/imagenet100/original_dataset/val", transform=val_transform)
+    # train_dataset = datasets.ImageFolder("data/tiny-imagenet-200/train", transform=train_transform)
+    # val_dataset = datasets.ImageFolder("data/tiny-imagenet-200/val/images", transform=val_transform)
 
-    val_dataset = (
-        wds.WebDataset("data/imagenet100_shards/val/val-{000000..000002}.tar", shardshuffle=False)
-        .decode("pil")
-        .to_tuple("jpg", "cls")
-        .map_tuple(val_transform, lambda x: int(x))
-    )
+    # add cutmix and mixup to the training dataset
+    mixup_cutmix = get_mixup_cutmix(mixup_alpha=params.mixup_alpha, cutmix_alpha=params.cutmix_alpha, num_classes=params.num_classes, use_v2=False)
+    if mixup_cutmix is not None:
+        def collate_fn(batch):
+            return mixup_cutmix(*default_collate(batch))
+    else:
+        collate_fn = default_collate
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, num_workers=6, pin_memory=True, prefetch_factor=4)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, num_workers=3, pin_memory=True)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=8, pin_memory=True, persistent_workers=True, collate_fn=collate_fn)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True, persistent_workers=True)
 
-    # create a mask for filtering indices that are not present
-    # present_indices = torch.tensor([0, 217, 482, 491, 497, 566, 569, 571, 574, 701]) # for Imagenette
-    # present_indices = torch.tensor([193, 182, 258, 162, 155, 167, 159, 273, 207, 229]).sort().values # for Imagewoof
-    present_indices = torch.tensor([
-    117,  70,  88, 133,   5,  97,  42,  60,  14,   3,
-    130,  55,  26,   0,  89, 127,  36,  67, 110,  65,
-    123,  57,  22,  21,   1,  71,  99,  16,  19, 108,
-     18,  35, 124,  90,  74, 129, 125,   2,  64,  92,
-    138,  48,  54,  39,  56,  96,  84,  73,  77,  52,
-     20, 118, 111,  59, 106,  75, 143,  80, 140,  11,
-    113,   4,  28,  50,  38, 104,  24, 107, 100,  81,
-     94,  41,  68,   8,  66, 146,  29,  32, 137,  33,
-    141, 134,  78, 150,  76,  61, 112,  83, 144,  91,
-    135, 116,  72,  34,   6, 119,  46, 115,  93,   7
-    ]).sort().values # for Imagenet100
-    mask = torch.zeros(1000, dtype=torch.bool)
-    mask[present_indices] = True
+    # display some image samples in augmented_images.png
+    sample_imgs, _ = next(iter(train_loader))
+    sample_imgs = sample_imgs[:16]  # take first 16 images
+    sample_imgs = sample_imgs.cpu().permute(0, 2, 3, 1) * torch.tensor(std).view(1, 1, 1, 3) + torch.tensor(mean).view(1, 1, 1, 3)
+    sample_imgs = torch.clamp(sample_imgs, 0, 1).numpy()
+    fig, axes = plt.subplots(4, 4, figsize=(8, 8))
+    for i, ax in enumerate(axes.flat):
+        ax.imshow(sample_imgs[i])
+        ax.axis('off')
+    plt.savefig("augmented_images.png")
+    plt.close()
 
-    return train_loader, val_loader, mask.to(device)
+    return train_loader, val_loader
 
 
-def distillation_loss(student_logits, teacher_logits, labels, T=4.0, alpha=0.5):
-    # 1. Classical loss (hard labels)
-    ce_loss = F.cross_entropy(student_logits, labels)
-
-    # 2. Soft targets with temperature
-    student_log_probs = F.log_softmax(student_logits / T, dim=1)
-    teacher_probs = F.softmax(teacher_logits / T, dim=1)
-
-    kl_loss = F.kl_div(student_log_probs, teacher_probs, reduction='batchmean')
-
-    # 3. Combination
-    loss = alpha * ce_loss + (1 - alpha) * (T * T) * kl_loss
-
-    return loss
-
-
-def train_one_epoch(train_loader, model, teacher_model, optimizer, device, alpha, mask, scaler, scheduler, log_interval=10):
+def train_one_epoch(train_loader, model, criterion, optimizer, device, scaler, log_interval=10):
     model.train()
+
     total_loss = 0.0
-    total_correct = 0
     total_samples = 0
 
-    for batch_idx, (imgs, labels) in enumerate(tqdm(train_loader, total=params.num_train_samples//params.batch_size, desc="Training", leave=False)):
-        imgs, labels = imgs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
+    for i, (imgs, labels) in enumerate(tqdm(train_loader, total=len(train_loader), desc="Training", leave=False)):
+        imgs, labels = imgs.to(device), labels.to(device)
 
         with torch.amp.autocast('cuda'):
             output = model(imgs)
-            if alpha < 1.0:
-                with torch.no_grad():
-                    teacher_outputs = teacher_model(imgs)[:, mask]
-                loss = distillation_loss(output, teacher_outputs, labels, alpha=alpha)
-            else:
-                loss = F.cross_entropy(output, labels)
+            loss = criterion(output, labels)
 
         optimizer.zero_grad(set_to_none=True)
         scaler.scale(loss).backward()
+        if params.clip_grad_norm is not None:
+            scaler.unscale_(optimizer) # we should unscale the gradients of optimizer's assigned params if do gradient clipping
+            torch.nn.utils.clip_grad_norm_(model.parameters(), params.clip_grad_norm)
         scaler.step(optimizer)
         scaler.update()
-        scheduler.step()
 
         total_loss += loss.item() * imgs.size(0)
-        total_correct += (output.argmax(dim=1) == labels).sum().item()
         total_samples += labels.size(0)
 
         # send batch loss to W&B occasionally
-        if (batch_idx + 1) % log_interval == 0:
-            current_lr = optimizer.param_groups[0]['lr']
-            wandb.log({"batch_train_loss": loss.item(), "learning_rate": current_lr})
+        if (i+1) % log_interval == 0:
+            wandb.log({"batch_train_loss": loss.item()})
 
     avg_loss = total_loss / total_samples
-    avg_acc = total_correct / total_samples
 
-    wandb.log({"train_loss": avg_loss, "train_acc": avg_acc})
+    current_lr = optimizer.param_groups[0]['lr']
+    wandb.log({"train_loss": avg_loss, "learning_rate": current_lr})
 
 
-def val_one_epoch(val_loader, model, teacher_model, device, alpha, mask):
+def val_one_epoch(val_loader, model, criterion, device):
     model.eval()
+
     total_loss = 0.0
     total_correct = 0
+    total_correct_top5 = 0
     total_samples = 0
 
     with torch.no_grad():
-        for imgs, labels in tqdm(val_loader, total=params.num_val_samples//params.batch_size, desc="Validation", leave=False):
-            imgs, labels = imgs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
+        for imgs, labels in tqdm(val_loader, total=len(val_loader), desc="Validation", leave=False):
+            imgs, labels = imgs.to(device), labels.to(device)
 
             with torch.amp.autocast('cuda'):
                 output = model(imgs)
-                if alpha < 1.0:
-                    teacher_outputs = teacher_model(imgs)[:, mask]
-                    loss = distillation_loss(output, teacher_outputs, labels, alpha=alpha)
-                else:
-                    loss = F.cross_entropy(output, labels)
+                loss = criterion(output, labels)
 
             total_loss += loss.item() * imgs.size(0)
             total_correct += (torch.argmax(output, dim=1) == labels).sum().item()
+            total_correct_top5 += (torch.topk(output, k=5, dim=1).indices == labels.unsqueeze(1)).any(dim=1).sum().item()
+            
             total_samples += labels.size(0)
 
     avg_loss = total_loss / total_samples
     avg_acc = total_correct / total_samples
+    avg_acc_top5 = total_correct_top5 / total_samples
 
-    wandb.log({"val_loss": avg_loss, "val_acc": avg_acc})
+    wandb.log({"val_loss": avg_loss, "val_acc": avg_acc, "val_acc_top5": avg_acc_top5})

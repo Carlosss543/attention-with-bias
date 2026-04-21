@@ -1,85 +1,64 @@
 import torch
-from custom_vision_transformer import vit_b_16, ViT_B_16_Weights
-from custom_vision_transformer import vit_custom_16
+from custom_vision_transformer import vit_custom
 from training_utils import *
 import training_parameters as params
-import math
+import wandb
 
 
 # --- device ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print("Device :", device)
-print("GPU visible :", torch.cuda.current_device())
-print("GPU name :", torch.cuda.get_device_name(torch.cuda.current_device()))
-
-
-# --- load teacher model ---
-if params.alpha < 1.0: # only load teacher model if we need it for the distillation loss
-    teacher_model = vit_b_16(weights=ViT_B_16_Weights.IMAGENET1K_V1).to(device)
-    teacher_model.eval()
-else:
-    teacher_model = None # dummy variable
+print(f"Device: {device}:{torch.cuda.current_device()} {torch.cuda.get_device_name(torch.cuda.current_device())}" if torch.cuda.is_available() else "CPU")
 
 
 # --- load model ---
-attention_bias = False
-model = vit_custom_16(num_classes=params.num_classes, attention_bias=attention_bias).to(device)
+model = vit_custom(num_classes=params.num_classes, image_size=params.crop_size, attention_bias=params.attention_bias).to(device)
 model = torch.compile(model)
-save_checkpoints = False
 print(f"Custom ViT number of parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.4f}M")
 
 
-# --- load data and get mask for filtering indices that are not in imagenette ---
-train_loader, val_loader, mask = get_data_loaders(params.batch_size, params.img_size, device)
-val_iter = iter(val_loader)
+# --- load data ---
+train_loader, val_loader = get_data_loaders(params.batch_size)
 
 
-# --- optimizer, gradient scaler for fp16 and scheduler ---
-# optimizer = torch.optim.AdamW(model.parameters(), lr=params.learning_rate, weight_decay=0.05, fused=True)
-optimizer = torch.optim.AdamW(model.parameters(), lr=params.learning_rate, fused=True)
+# --- optimizer, criterion, gradient scaler for fp16 ---
+optimizer = torch.optim.AdamW(model.parameters(), lr=params.lr, weight_decay=params.weight_decay, fused=True)
+
+criterion_train = torch.nn.CrossEntropyLoss(label_smoothing=params.label_smoothing)
+criterion_val = torch.nn.CrossEntropyLoss()
 
 scaler = torch.amp.GradScaler('cuda')
 
-steps_per_epoch = math.ceil(params.num_train_samples / params.batch_size)
-warmup_steps = int(3 * steps_per_epoch)  # 5 epochs of warmup
-max_steps = params.num_epochs * steps_per_epoch
 
-def lr_lambda(it):
-    if it < warmup_steps:
-        return (it+1) / warmup_steps
-    decay_ratio = (it - warmup_steps) / (max_steps - warmup_steps)
-    return 0.5 * (1 + math.cos(math.pi * decay_ratio))
-
-scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+# --- learning rate scheduler with warmup and cosine decay ---
+warmup_lr_scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=params.lr_warmup_decay, total_iters=params.lr_warmup_epochs)
+main_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=params.num_epochs - params.lr_warmup_epochs)
+lr_scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[warmup_lr_scheduler, main_lr_scheduler], milestones=[params.lr_warmup_epochs])
 
 
 # --- initialize wandb ---
+config = {k: v for k, v in vars(params).items() if not k.startswith("_")}
 run = wandb.init(
     project="attention_bias",
     dir="./wandb_logs",
-    config={
-        "model_type": "vit_custom_16",
-        "dataset": params.dataset_name,
-        "batch_size": params.batch_size,
-        "learning_rate": params.learning_rate,
-        "alpha": str(params.alpha),
-        "attention_bias": str(attention_bias),
-    },
+    config=config,
     mode="online"  # online/disabled
 )
 
 
 # --- training loop ---
 for epoch in tqdm(range(1, params.num_epochs + 1), desc="Epochs"):
-    train_one_epoch(train_loader, model, teacher_model, optimizer, device, params.alpha, mask, scaler, scheduler)
-    val_one_epoch(val_loader, model, teacher_model, device, params.alpha, mask)
+    train_one_epoch(train_loader, model, criterion_train, optimizer, device, scaler)
+    lr_scheduler.step()
+    val_one_epoch(val_loader, model, criterion_val, device)
 
-    if epoch % 10 == 0 and save_checkpoints: # Save the model checkpoint every 10 epochs
+    if params.checkpoints_interval is not None and epoch % params.checkpoints_interval == 0:
         checkpoint = {
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
-            "scaler_state_dict": scaler.state_dict()
+            "lr_scheduler_state_dict": lr_scheduler.state_dict(),
+            "scaler_state_dict": scaler.state_dict(),
+            "params": config
         }
-        torch.save(checkpoint, f"./training_checkpoints/vit_custom_16_epoch_{epoch}.pth")
+        torch.save(checkpoint, f"./training_checkpoints{params.folder_number}/vit_custom_epoch_{epoch}.pth")
         print(f"Checkpoint epoch {epoch} saved.")

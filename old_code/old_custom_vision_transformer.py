@@ -74,25 +74,22 @@ class MLPBlock(MLP):
 
 
 class AttentionWithBias(nn.Module):
-    def __init__(self, hidden_dim, num_heads, dropout: float = 0.0, use_bias: bool = False):
+
+    def __init__(self, hidden_dim, num_heads, dropout: float = 0.0):
         super().__init__()
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisible by num_heads"
-
         self.num_heads = num_heads
         self.head_dim = hidden_dim // num_heads
         self.scale = self.head_dim ** -0.5
 
         self.qkv = nn.Linear(hidden_dim, hidden_dim * 3)
+        self.b = nn.Linear(hidden_dim, num_heads) # learned bias
         self.out_proj = nn.Linear(hidden_dim, hidden_dim) # final projection after concatenating heads
         self.dropout = nn.Dropout(dropout)
 
-        if use_bias:
-            self.b = nn.Linear(hidden_dim, num_heads) # learned bias
-            # initialize bias to 0 so that the model starts with classic attention and can learn to use the bias if needed
-            nn.init.zeros_(self.b.weight)
-            nn.init.zeros_(self.b.bias)
-        else:
-            self.register_parameter("b", None)
+        # initialize bias to 0 so that the model starts with classic attention and can learn to use the bias if needed
+        nn.init.zeros_(self.b.weight)
+        nn.init.zeros_(self.b.bias)
 
     def forward(self, x):
         B, T, C = x.shape
@@ -106,12 +103,12 @@ class AttentionWithBias(nn.Module):
         attn = (q @ k.transpose(-2, -1)) * self.scale  # (B, H, T, T)
 
         # ---- Learned Bias ----
-        if self.b is not None:
-            b = self.b(x)  # (B, T, H)
-            b = b.permute(0, 2, 1) # (B, H, T)
-            b = b.unsqueeze(-2) # (B, H, 1, T)
+        b = self.b(x)  # (B, T, H)
+        b = b.permute(0, 2, 1) # (B, H, T)
+        b = b.unsqueeze(-2) # (B, H, 1, T)
 
-            attn = attn + b
+        # ---- Add Bias ----
+        attn = attn + b
 
         # ---- Softmax ----
         attn = attn.softmax(dim=-1)
@@ -139,10 +136,15 @@ class EncoderBlock(nn.Module):
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
     ):
         super().__init__()
+        self.num_heads = num_heads
+        self.attention_bias = attention_bias
 
         # Attention block
         self.ln_1 = norm_layer(hidden_dim)
-        self.attention =  AttentionWithBias(hidden_dim, num_heads, dropout=attention_dropout, use_bias=attention_bias)
+        if self.attention_bias:
+            self.self_attention = AttentionWithBias(hidden_dim, num_heads, dropout=attention_dropout)
+        else:
+            self.self_attention = nn.MultiheadAttention(hidden_dim, num_heads, dropout=attention_dropout, batch_first=True)
         self.dropout = nn.Dropout(dropout)
 
         # MLP block
@@ -152,7 +154,10 @@ class EncoderBlock(nn.Module):
     def forward(self, input: torch.Tensor):
         torch._assert(input.dim() == 3, f"Expected (batch_size, seq_length, hidden_dim) got {input.shape}")
         x = self.ln_1(input)
-        x, _ = self.attention(x)
+        if self.attention_bias:
+            x, _ = self.self_attention(x)
+        else:
+            x, _ = self.self_attention(x, x, x, need_weights=False)
         x = self.dropout(x)
         x = x + input
 
