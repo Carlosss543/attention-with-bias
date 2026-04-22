@@ -3,6 +3,7 @@ from custom_vision_transformer import vit_custom
 from training_utils import *
 import training_parameters as params
 import wandb
+import os
 
 
 # --- device ---
@@ -54,11 +55,12 @@ for epoch in tqdm(range(1, params.num_epochs + 1), desc="Epochs"):
     if params.checkpoints_interval is not None and epoch % params.checkpoints_interval == 0:
         checkpoint = {
             "epoch": epoch,
-            "model_state_dict": model.state_dict(),
+            "model_state_dict": model._orig_mod.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "lr_scheduler_state_dict": lr_scheduler.state_dict(),
             "scaler_state_dict": scaler.state_dict(),
             "params": config
         }
-        torch.save(checkpoint, f"./training_checkpoints{params.folder_number}/vit_custom_epoch_{epoch}.pth")
-        print(f"Checkpoint epoch {epoch} saved.")
+        checkpoint_dir = f"./training_checkpoints/checkpoint{params.folder_number}"
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        torch.save(checkpoint, f"{checkpoint_dir}/vit_custom_epoch_{epoch}.pth")

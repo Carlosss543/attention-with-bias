@@ -1,13 +1,7 @@
 __pycache__/
 attention_maps/
 data/
-
-
-training_checkpoints1/
-training_checkpoints2/
-
-
-
+training_checkpoints/
 wandb_logs/
 
 architecture_vit.txt

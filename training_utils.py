@@ -10,13 +10,12 @@ import training_parameters as params
 from torch.utils.data.dataloader import default_collate
 
 
-def get_data_loaders(batch_size):
+def get_data_loaders(batch_size, persistent_workers=True, shuffle_val=False):
 
     mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]  # mean and std for ImageNet
 
     train_transform = transforms.Compose([
         transforms.RandomResizedCrop(params.crop_size, interpolation=InterpolationMode.BILINEAR, antialias=True),
-        # transforms.RandomResizedCrop(params.crop_size, interpolation=InterpolationMode.BILINEAR, antialias=True, scale=(0.8, 1.0)),
         transforms.RandomHorizontalFlip(),
         transforms.RandAugment(interpolation=InterpolationMode.BILINEAR, num_ops=2, magnitude=9),
         transforms.ToTensor(),
@@ -32,8 +31,6 @@ def get_data_loaders(batch_size):
 
     train_dataset = datasets.ImageFolder("data/imagenet100/original_dataset/train", transform=train_transform)
     val_dataset = datasets.ImageFolder("data/imagenet100/original_dataset/val", transform=val_transform)
-    # train_dataset = datasets.ImageFolder("data/tiny-imagenet-200/train", transform=train_transform)
-    # val_dataset = datasets.ImageFolder("data/tiny-imagenet-200/val/images", transform=val_transform)
 
     # add cutmix and mixup to the training dataset
     mixup_cutmix = get_mixup_cutmix(mixup_alpha=params.mixup_alpha, cutmix_alpha=params.cutmix_alpha, num_classes=params.num_classes, use_v2=False)
@@ -43,8 +40,8 @@ def get_data_loaders(batch_size):
     else:
         collate_fn = default_collate
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=8, pin_memory=True, persistent_workers=True, collate_fn=collate_fn)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True, persistent_workers=True)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=8, pin_memory=True, persistent_workers=persistent_workers, collate_fn=collate_fn) # num_workers=8 pour imagenet1100, 4 pour tiny imagenet
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=shuffle_val, num_workers=4, pin_memory=True, persistent_workers=persistent_workers) # num_workers=4 pour imagenet1100, 2 pour tiny imagenet
 
     # display some image samples in augmented_images.png
     sample_imgs, _ = next(iter(train_loader))
