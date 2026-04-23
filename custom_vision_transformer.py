@@ -114,7 +114,8 @@ class AttentionWithBias(nn.Module):
             attn = attn + b
 
         # ---- Softmax ----
-        attn = attn.softmax(dim=-1)
+        # attn = attn.softmax(dim=-1)
+        attn = attn.relu()
         attn = self.dropout(attn)
 
         # ---- Output ----

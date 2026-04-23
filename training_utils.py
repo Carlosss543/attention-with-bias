@@ -29,8 +29,8 @@ def get_data_loaders(batch_size, persistent_workers=True, shuffle_val=False):
         transforms.Normalize(mean=mean, std=std)
     ])
 
-    train_dataset = datasets.ImageFolder("data/imagenet100/original_dataset/train", transform=train_transform)
-    val_dataset = datasets.ImageFolder("data/imagenet100/original_dataset/val", transform=val_transform)
+    train_dataset = datasets.ImageFolder("data/imagenet100/train", transform=train_transform)
+    val_dataset = datasets.ImageFolder("data/imagenet100/val", transform=val_transform)
 
     # add cutmix and mixup to the training dataset
     mixup_cutmix = get_mixup_cutmix(mixup_alpha=params.mixup_alpha, cutmix_alpha=params.cutmix_alpha, num_classes=params.num_classes, use_v2=False)
@@ -43,7 +43,7 @@ def get_data_loaders(batch_size, persistent_workers=True, shuffle_val=False):
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=8, pin_memory=True, persistent_workers=persistent_workers, collate_fn=collate_fn) # num_workers=8 pour imagenet1100, 4 pour tiny imagenet
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=shuffle_val, num_workers=4, pin_memory=True, persistent_workers=persistent_workers) # num_workers=4 pour imagenet1100, 2 pour tiny imagenet
 
-    # display some image samples in augmented_images.png
+    # display some image samples in results/augmented_images.png
     sample_imgs, _ = next(iter(train_loader))
     sample_imgs = sample_imgs[:16]  # take first 16 images
     sample_imgs = sample_imgs.cpu().permute(0, 2, 3, 1) * torch.tensor(std).view(1, 1, 1, 3) + torch.tensor(mean).view(1, 1, 1, 3)
@@ -52,7 +52,7 @@ def get_data_loaders(batch_size, persistent_workers=True, shuffle_val=False):
     for i, ax in enumerate(axes.flat):
         ax.imshow(sample_imgs[i])
         ax.axis('off')
-    plt.savefig("augmented_images.png")
+    plt.savefig("results/augmented_images.png")
     plt.close()
 
     return train_loader, val_loader
