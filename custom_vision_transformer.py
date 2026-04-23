@@ -509,7 +509,7 @@ def vit_b_16(*, weights: Optional[ViT_B_16_Weights] = None, progress: bool = Tru
 
 def vit_custom(*, weights = None, progress: bool = True, attention_bias: bool = False, **kwargs: Any) -> VisionTransformer:
     return _vision_transformer(
-        patch_size=16, #8 pour TinyImageNet, 16 pour ImageNet100
+        patch_size=16,
         num_layers=12,
         num_heads=6,
         hidden_dim=384,

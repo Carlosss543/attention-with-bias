@@ -11,7 +11,7 @@ lr = 0.001
 lr_warmup_epochs = 10
 lr_warmup_decay = 0.033
 
-weight_decay = 0.01 # adamw default value is 0.01
+weight_decay = 0.01
 label_smoothing = 0.1
 mixup_alpha = 0.2
 cutmix_alpha = 1.0
@@ -20,5 +20,5 @@ clip_grad_norm = 1.0
 model_type = "vit_custom"
 attention_bias = True
 
-checkpoints_interval = 5
+checkpoints_interval = None
 folder_number = 1

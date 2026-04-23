@@ -1,8 +1,16 @@
 __pycache__/
-attention_maps/
-data/
-training_checkpoints/
-wandb_logs/
 
-architecture_vit.txt
-augmented_images.png
+attention_maps/*
+!attention_maps/.gitkeep
+
+data/*
+!data/.gitkeep
+
+results/*
+!results/.gitkeep
+
+training_checkpoints/*
+!training_checkpoints/.gitkeep
+
+wandb_logs/*
+!wandb_logs/.gitkeep
