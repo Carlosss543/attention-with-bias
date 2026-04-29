@@ -42,6 +42,7 @@ run = wandb.init(
     project="attention_bias",
     dir="./wandb_logs",
     config=config,
+    group=f"{params.dataset_name}",
     mode="online"  # online/disabled
 )
 
