@@ -85,6 +85,7 @@ class AttentionWithBias(nn.Module):
         self.qkv = nn.Linear(hidden_dim, hidden_dim * 3)
         self.out_proj = nn.Linear(hidden_dim, hidden_dim) # final projection after concatenating heads
         self.dropout = nn.Dropout(dropout)
+        self.register_buffer("last_pruned_ratio", torch.tensor(0.0), persistent=False)
 
         if use_bias:
             self.b = nn.Linear(hidden_dim, num_heads) # learned bias
@@ -108,14 +109,29 @@ class AttentionWithBias(nn.Module):
         # ---- Learned Bias ----
         if self.b is not None:
             b = self.b(x)  # (B, T, H)
-            b = b.permute(0, 2, 1) # (B, H, T)
-            b = b.unsqueeze(-2) # (B, H, 1, T)
+            b = b.permute(0, 2, 1).unsqueeze(-2)  # (B, H, 1, T)
 
-            attn = attn + b
+            mask = (b >= 0)  # (B, H, 1, T)
+            # fallback PAR batch et PAR head
+            all_masked = ~mask.any(dim=-1, keepdim=True)  # (B, H, 1, 1)
+            idx = b.squeeze(-2).argmax(dim=-1, keepdim=True).unsqueeze(-2)  # (B, H, 1, 1)
+            mask = mask.clone()
+            mask = torch.where(all_masked, torch.zeros_like(mask).scatter(-1, idx, True), mask)
+
+            pruned_tokens = (~mask).sum(dim=-1).float()  # (B, H, 1)
+            self.last_pruned_ratio.copy_((pruned_tokens / mask.shape[-1]).mean().detach())
+
+            b_hard = torch.where(mask, b, float('-inf'))
+
+            # STE trick
+            b_soft = b  # gradient passe ici
+
+            attn = attn + (b_hard - b_soft).detach() + b_soft
+        else:
+            self.last_pruned_ratio.zero_()
 
         # ---- Softmax ----
-        # attn = attn.softmax(dim=-1)
-        attn = attn.relu()
+        attn = attn.softmax(dim=-1)
         attn = self.dropout(attn)
 
         # ---- Output ----

@@ -10,6 +10,21 @@ import training_parameters as params
 from torch.utils.data.dataloader import default_collate
 
 
+def _get_attention_pruning_metrics(model):
+    base_model = model._orig_mod if hasattr(model, "_orig_mod") else model
+
+    pruned_ratios = []
+    for module in base_model.modules():
+        if hasattr(module, "last_pruned_ratio"):
+            pruned_ratios.append(module.last_pruned_ratio.detach().item())
+
+    if not pruned_ratios:
+        return None
+
+    avg_pruned_ratio = sum(pruned_ratios) / len(pruned_ratios)
+    return avg_pruned_ratio
+
+
 def get_data_loaders(batch_size, persistent_workers=True, shuffle_val=False):
 
     mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]  # mean and std for ImageNet
@@ -84,7 +99,11 @@ def train_one_epoch(train_loader, model, criterion, optimizer, device, scaler, l
 
         # send batch loss to W&B occasionally
         if (i+1) % log_interval == 0:
-            wandb.log({"batch_train_loss": loss.item()})
+            avg_pruned_ratio = _get_attention_pruning_metrics(model)
+            log_payload = {"batch_train_loss": loss.item()}
+            if avg_pruned_ratio is not None:
+                log_payload["batch_avg_pruned_tokens_ratio"] = avg_pruned_ratio
+            wandb.log(log_payload)
 
     avg_loss = total_loss / total_samples
 
