@@ -85,15 +85,14 @@ class AttentionWithBias(nn.Module):
         self.qkv = nn.Linear(hidden_dim, hidden_dim * 3)
         self.out_proj = nn.Linear(hidden_dim, hidden_dim) # final projection after concatenating heads
         self.dropout = nn.Dropout(dropout)
-        self.register_buffer("last_pruned_ratio", torch.tensor(0.0), persistent=False)
 
+        self.register_buffer("last_pruned_ratio", torch.tensor(0.0), persistent=False)
         if use_bias:
             self.b = nn.Linear(hidden_dim, num_heads) # learned bias
-            # initialize bias to 0 so that the model starts with classic attention and can learn to use the bias if needed
-            nn.init.zeros_(self.b.weight)
-            nn.init.zeros_(self.b.bias)
+            nn.init.zeros_(self.b.weight) # initialize bias to 0 so that the model starts with classic attention and can learn to use the bias if needed
+            nn.init.ones_(self.b.bias) # for training pruning, initialize bias to 1 so that the model starts with all tokens and can learn to prune if needed
         else:
-            self.register_parameter("b", None)
+            self.b = None
 
     def forward(self, x):
         B, T, C = x.shape
@@ -112,30 +111,25 @@ class AttentionWithBias(nn.Module):
             b = b.permute(0, 2, 1).unsqueeze(-2)  # (B, H, 1, T)
 
             mask = (b >= 0)  # (B, H, 1, T)
-            # fallback PAR batch et PAR head
+
+            # avoid the case where all tokens are masked for a given head, which would result in a division by zero in the softmax and NaN values in the attention output, we ensure that at least one token is kept for each head by unmasking the token with the highest bias value for that head
             all_masked = ~mask.any(dim=-1, keepdim=True)  # (B, H, 1, 1)
-            idx = b.squeeze(-2).argmax(dim=-1, keepdim=True).unsqueeze(-2)  # (B, H, 1, 1)
-            mask = mask.clone()
+            idx = b.argmax(dim=-1, keepdim=True)  # (B, H, 1, 1)
             mask = torch.where(all_masked, torch.zeros_like(mask).scatter(-1, idx, True), mask)
 
-            pruned_tokens = (~mask).sum(dim=-1).float()  # (B, H, 1)
-            self.last_pruned_ratio.copy_((pruned_tokens / mask.shape[-1]).mean().detach())
+            pruned_tokens = (~mask).sum(dim=-1)  # (B, H, 1)
+            self.last_pruned_ratio.copy_((pruned_tokens / T).mean().detach())
 
-            b_hard = torch.where(mask, b, float('-inf'))
+            b = torch.where(mask, b, float('-inf'))
 
-            # STE trick
-            b_soft = b  # gradient passe ici
-
-            attn = attn + (b_hard - b_soft).detach() + b_soft
-        else:
-            self.last_pruned_ratio.zero_()
+            attn = attn + b
 
         # ---- Softmax ----
         attn = attn.softmax(dim=-1)
         attn = self.dropout(attn)
 
         # ---- Output ----
-        out = (attn @ v) # (B, H, T, D)
+        out = attn @ v # (B, H, T, D)
         out = out.transpose(1, 2).reshape(B, T, C) # (B, T, C)
         out = self.out_proj(out)
 
