@@ -14,3 +14,5 @@ training_checkpoints/*
 
 wandb_logs/*
 !wandb_logs/.gitkeep
+
+test_codes/

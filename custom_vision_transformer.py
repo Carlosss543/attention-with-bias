@@ -74,7 +74,7 @@ class MLPBlock(MLP):
 
 
 class AttentionWithBias(nn.Module):
-    def __init__(self, hidden_dim, num_heads, dropout: float = 0.0, use_bias: bool = False):
+    def __init__(self, hidden_dim, num_heads, dropout: float = 0.0, use_bias: bool = False, use_mask: bool = True):
         super().__init__()
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisible by num_heads"
 
@@ -86,6 +86,7 @@ class AttentionWithBias(nn.Module):
         self.out_proj = nn.Linear(hidden_dim, hidden_dim) # final projection after concatenating heads
         self.dropout = nn.Dropout(dropout)
 
+        self.use_mask = use_mask
         self.register_buffer("last_pruned_ratio", torch.tensor(0.0), persistent=False)
         if use_bias:
             self.b = nn.Linear(hidden_dim, num_heads) # learned bias
@@ -110,17 +111,18 @@ class AttentionWithBias(nn.Module):
             b = self.b(x)  # (B, T, H)
             b = b.permute(0, 2, 1).unsqueeze(-2)  # (B, H, 1, T)
 
-            mask = (b >= 0)  # (B, H, 1, T)
+            if self.use_mask:
+                mask = (b >= 0)  # (B, H, 1, T)
 
-            # avoid the case where all tokens are masked for a given head, which would result in a division by zero in the softmax and NaN values in the attention output, we ensure that at least one token is kept for each head by unmasking the token with the highest bias value for that head
-            all_masked = ~mask.any(dim=-1, keepdim=True)  # (B, H, 1, 1)
-            idx = b.argmax(dim=-1, keepdim=True)  # (B, H, 1, 1)
-            mask = torch.where(all_masked, torch.zeros_like(mask).scatter(-1, idx, True), mask)
+                # avoid the case where all tokens are masked for a given head, which would result in a division by zero in the softmax and NaN values in the attention output, we ensure that at least one token is kept for each head by unmasking the token with the highest bias value for that head
+                all_masked = ~mask.any(dim=-1, keepdim=True)  # (B, H, 1, 1)
+                idx = b.argmax(dim=-1, keepdim=True)  # (B, H, 1, 1)
+                mask = torch.where(all_masked, torch.zeros_like(mask).scatter(-1, idx, True), mask)
 
-            pruned_tokens = (~mask).sum(dim=-1)  # (B, H, 1)
-            self.last_pruned_ratio.copy_((pruned_tokens / T).mean().detach())
+                pruned_tokens = (~mask).sum(dim=-1)  # (B, H, 1)
+                self.last_pruned_ratio.copy_((pruned_tokens / T).mean().detach())
 
-            b = torch.where(mask, b, float('-inf'))
+                b = torch.where(mask, b, float('-inf'))
 
             attn = attn + b
 
@@ -147,13 +149,14 @@ class EncoderBlock(nn.Module):
         dropout: float,
         attention_dropout: float,
         attention_bias: bool,
+        attention_mask: bool,
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
     ):
         super().__init__()
 
         # Attention block
         self.ln_1 = norm_layer(hidden_dim)
-        self.attention =  AttentionWithBias(hidden_dim, num_heads, dropout=attention_dropout, use_bias=attention_bias)
+        self.attention =  AttentionWithBias(hidden_dim, num_heads, dropout=attention_dropout, use_bias=attention_bias, use_mask=attention_mask)
         self.dropout = nn.Dropout(dropout)
 
         # MLP block
@@ -185,6 +188,7 @@ class Encoder(nn.Module):
         dropout: float,
         attention_dropout: float,
         attention_bias: bool,
+        attention_mask: bool,
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
     ):
         super().__init__()
@@ -201,6 +205,7 @@ class Encoder(nn.Module):
                 dropout,
                 attention_dropout,
                 attention_bias,
+                attention_mask,
                 norm_layer,
             )
         self.layers = nn.Sequential(layers)
@@ -226,6 +231,7 @@ class VisionTransformer(nn.Module):
         dropout: float = 0.0,
         attention_dropout: float = 0.0,
         attention_bias: bool = False,
+        attention_mask: bool = False,
         num_classes: int = 1000,
         representation_size: Optional[int] = None,
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
@@ -239,6 +245,7 @@ class VisionTransformer(nn.Module):
         self.hidden_dim = hidden_dim
         self.mlp_dim = mlp_dim
         self.attention_bias = attention_bias
+        self.attention_mask = attention_mask
         self.attention_dropout = attention_dropout
         self.dropout = dropout
         self.num_classes = num_classes
@@ -286,6 +293,7 @@ class VisionTransformer(nn.Module):
             dropout,
             attention_dropout,
             attention_bias,
+            attention_mask,
             norm_layer,
         )
         self.seq_length = seq_length
@@ -372,6 +380,7 @@ def _vision_transformer(
     weights: Optional[WeightsEnum],
     progress: bool,
     attention_bias: bool = False,
+    attention_mask: bool = False,
     **kwargs: Any,
 ) -> VisionTransformer:
     if weights is not None:
@@ -388,6 +397,7 @@ def _vision_transformer(
         hidden_dim=hidden_dim,
         mlp_dim=mlp_dim,
         attention_bias=attention_bias,
+        attention_mask=attention_mask,
         **kwargs,
     )
 
@@ -518,7 +528,7 @@ def vit_b_16(*, weights: Optional[ViT_B_16_Weights] = None, progress: bool = Tru
         **kwargs,
     )
 
-def vit_custom(*, weights = None, progress: bool = True, attention_bias: bool = False, **kwargs: Any) -> VisionTransformer:
+def vit_custom(*, weights = None, progress: bool = True, attention_bias: bool = False, attention_mask: bool = False, **kwargs: Any) -> VisionTransformer:
     return _vision_transformer(
         patch_size=16,
         num_layers=12,
@@ -528,5 +538,6 @@ def vit_custom(*, weights = None, progress: bool = True, attention_bias: bool = 
         weights=weights,
         progress=progress,
         attention_bias=attention_bias,
+        attention_mask=attention_mask,
         **kwargs,
     )

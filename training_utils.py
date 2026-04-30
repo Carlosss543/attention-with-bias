@@ -44,8 +44,8 @@ def get_data_loaders(batch_size, persistent_workers=True, shuffle_val=False):
         transforms.Normalize(mean=mean, std=std)
     ])
 
-    train_dataset = datasets.ImageFolder("data/imagenet100/train", transform=train_transform)
-    val_dataset = datasets.ImageFolder("data/imagenet100/val", transform=val_transform)
+    train_dataset = datasets.ImageFolder("/data_fast/data_charles/imagenet100/train", transform=train_transform)
+    val_dataset = datasets.ImageFolder("/data_fast/data_charles/imagenet100/val", transform=val_transform)
 
     # add cutmix and mixup to the training dataset
     mixup_cutmix = get_mixup_cutmix(mixup_alpha=params.mixup_alpha, cutmix_alpha=params.cutmix_alpha, num_classes=params.num_classes, use_v2=False)
@@ -55,7 +55,7 @@ def get_data_loaders(batch_size, persistent_workers=True, shuffle_val=False):
     else:
         collate_fn = default_collate
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=8, pin_memory=True, persistent_workers=persistent_workers, collate_fn=collate_fn) # num_workers=8 pour imagenet1100, 4 pour tiny imagenet
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=12, pin_memory=True, persistent_workers=persistent_workers, collate_fn=collate_fn) # num_workers=8 pour imagenet1100, 4 pour tiny imagenet
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=shuffle_val, num_workers=4, pin_memory=True, persistent_workers=persistent_workers) # num_workers=4 pour imagenet1100, 2 pour tiny imagenet
 
     # display some image samples in results/augmented_images.png
