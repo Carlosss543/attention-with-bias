@@ -58,17 +58,17 @@ def get_data_loaders(batch_size, persistent_workers=True, shuffle_val=False):
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=12, pin_memory=True, persistent_workers=persistent_workers, collate_fn=collate_fn) # num_workers=8 pour imagenet1100, 4 pour tiny imagenet
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=shuffle_val, num_workers=4, pin_memory=True, persistent_workers=persistent_workers) # num_workers=4 pour imagenet1100, 2 pour tiny imagenet
 
-    # display some image samples in results/augmented_images.png
-    sample_imgs, _ = next(iter(train_loader))
-    sample_imgs = sample_imgs[:16]  # take first 16 images
-    sample_imgs = sample_imgs.cpu().permute(0, 2, 3, 1) * torch.tensor(std).view(1, 1, 1, 3) + torch.tensor(mean).view(1, 1, 1, 3)
-    sample_imgs = torch.clamp(sample_imgs, 0, 1).numpy()
-    fig, axes = plt.subplots(4, 4, figsize=(8, 8))
-    for i, ax in enumerate(axes.flat):
-        ax.imshow(sample_imgs[i])
-        ax.axis('off')
-    plt.savefig("results/augmented_images.png")
-    plt.close()
+    # # display some image samples in results/augmented_images.png
+    # sample_imgs, _ = next(iter(train_loader))
+    # sample_imgs = sample_imgs[:16]  # take first 16 images
+    # sample_imgs = sample_imgs.cpu().permute(0, 2, 3, 1) * torch.tensor(std).view(1, 1, 1, 3) + torch.tensor(mean).view(1, 1, 1, 3)
+    # sample_imgs = torch.clamp(sample_imgs, 0, 1).numpy()
+    # fig, axes = plt.subplots(4, 4, figsize=(8, 8))
+    # for i, ax in enumerate(axes.flat):
+    #     ax.imshow(sample_imgs[i])
+    #     ax.axis('off')
+    # plt.savefig("results/augmented_images.png")
+    # plt.close()
 
     return train_loader, val_loader
 
