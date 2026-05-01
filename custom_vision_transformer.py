@@ -10,6 +10,7 @@ from torchvision.models._meta import _IMAGENET_CATEGORIES
 from torchvision.models._utils import _ovewrite_named_param, handle_legacy_interface
 import torch
 import torch.nn as nn
+import training_parameters as params
 
 
 __all__ = [
@@ -86,14 +87,15 @@ class AttentionWithBias(nn.Module):
         self.out_proj = nn.Linear(hidden_dim, hidden_dim) # final projection after concatenating heads
         self.dropout = nn.Dropout(dropout)
 
-        self.use_mask = use_mask
-        self.register_buffer("last_pruned_ratio", torch.tensor(0.0), persistent=False)
         if use_bias:
-            self.b = nn.Linear(hidden_dim, num_heads) # learned bias
+            self.b = nn.Linear(hidden_dim, num_heads, bias=False) # learned bias
             nn.init.zeros_(self.b.weight) # initialize bias to 0 so that the model starts with classic attention and can learn to use the bias if needed
-            nn.init.ones_(self.b.bias) # for training pruning, initialize bias to 1 so that the model starts with all tokens and can learn to prune if needed
         else:
             self.b = None
+
+        self.use_mask = use_mask
+        self.threshold = params.mask_threshold # threshold for masking tokens based on bias values, can be tuned as a hyperparameter
+        self.register_buffer("last_pruned_ratio", torch.tensor(0.0), persistent=False)
 
     def forward(self, x):
         B, T, C = x.shape
@@ -112,15 +114,16 @@ class AttentionWithBias(nn.Module):
             b = b.permute(0, 2, 1).unsqueeze(-2)  # (B, H, 1, T)
 
             if self.use_mask:
-                mask = (b >= 0)  # (B, H, 1, T)
+                mask = (b > self.threshold)  # (B, H, 1, T)
 
                 # avoid the case where all tokens are masked for a given head, which would result in a division by zero in the softmax and NaN values in the attention output, we ensure that at least one token is kept for each head by unmasking the token with the highest bias value for that head
                 all_masked = ~mask.any(dim=-1, keepdim=True)  # (B, H, 1, 1)
                 idx = b.argmax(dim=-1, keepdim=True)  # (B, H, 1, 1)
                 mask = torch.where(all_masked, torch.zeros_like(mask).scatter(-1, idx, True), mask)
 
+                # metrics for monitoring the pruning ratio during training
                 pruned_tokens = (~mask).sum(dim=-1)  # (B, H, 1)
-                self.last_pruned_ratio.copy_((pruned_tokens / T).mean().detach())
+                self.last_pruned_ratio.copy_((pruned_tokens / T).float().mean().detach())
 
                 b = torch.where(mask, b, float('-inf'))
 

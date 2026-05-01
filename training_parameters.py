@@ -20,6 +20,7 @@ clip_grad_norm = 1.0
 model_type = "vit_custom"
 attention_bias = True
 attention_mask = True
+mask_threshold = -1.0
 
 checkpoints_interval = 50
-folder_number = 5
+folder_number = 4
