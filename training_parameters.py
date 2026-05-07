@@ -18,9 +18,9 @@ cutmix_alpha = 1.0
 clip_grad_norm = 1.0
 
 model_type = "vit_custom"
-attention_bias = True
-attention_mask = True
-mask_threshold = -1.0
+use_bias = True
+bias_threshold = -1.0
+bias_topk = None #[0.8]*6 + [0.4]*6
 
-checkpoints_interval = 50
-folder_number = 4
+checkpoints_interval = None
+folder_number = 6

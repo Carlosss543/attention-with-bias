@@ -10,7 +10,6 @@ from torchvision.models._meta import _IMAGENET_CATEGORIES
 from torchvision.models._utils import _ovewrite_named_param, handle_legacy_interface
 import torch
 import torch.nn as nn
-import training_parameters as params
 
 
 __all__ = [
@@ -75,67 +74,76 @@ class MLPBlock(MLP):
 
 
 class AttentionWithBias(nn.Module):
-    def __init__(self, hidden_dim, num_heads, dropout: float = 0.0, use_bias: bool = False, use_mask: bool = True):
+    def __init__(self, hidden_dim, num_heads, dropout: float = 0.0, use_bias: bool = False, bias_threshold: float = None, bias_topk: float = None):
         super().__init__()
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisible by num_heads"
-
         self.num_heads = num_heads
         self.head_dim = hidden_dim // num_heads
         self.scale = self.head_dim ** -0.5
 
-        self.qkv = nn.Linear(hidden_dim, hidden_dim * 3)
-        self.out_proj = nn.Linear(hidden_dim, hidden_dim) # final projection after concatenating heads
+        self.q = nn.Linear(hidden_dim, hidden_dim)
+        self.k = nn.Linear(hidden_dim, hidden_dim)
+        self.v = nn.Linear(hidden_dim, hidden_dim)
+        self.out_proj = nn.Linear(hidden_dim, hidden_dim)
         self.dropout = nn.Dropout(dropout)
 
         if use_bias:
-            self.b = nn.Linear(hidden_dim, num_heads, bias=False) # learned bias
-            nn.init.zeros_(self.b.weight) # initialize bias to 0 so that the model starts with classic attention and can learn to use the bias if needed
+            self.b = nn.Linear(hidden_dim, num_heads, bias=False)
+            nn.init.zeros_(self.b.weight)
         else:
             self.b = None
 
-        self.use_mask = use_mask
-        self.threshold = params.mask_threshold # threshold for masking tokens based on bias values, can be tuned as a hyperparameter
+        self.bias_threshold = bias_threshold
+        self.bias_topk = bias_topk
         self.register_buffer("last_pruned_ratio", torch.tensor(0.0), persistent=False)
 
     def forward(self, x):
         B, T, C = x.shape
+        H, D = self.num_heads, self.head_dim
 
-        # ---- QKV ----
-        qkv = self.qkv(x).reshape(B, T, 3, self.num_heads, self.head_dim) # (B, T, 3, H, D)
-        q, k, v = qkv.unbind(2)  # (B, T, H, D)
-        q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)  # (B, H, T, D)
+        # Projections Q, K, V
+        q = self.q(x).reshape(B, T, H, D).transpose(1, 2)  # (B, H, T, D)
+        k = self.k(x).reshape(B, T, H, D).transpose(1, 2)  # (B, H, T, D)
+        v = self.v(x).reshape(B, T, H, D).transpose(1, 2)  # (B, H, T, D)
 
-        # ---- Classic Attention ----
+        # Classic attention
         attn = (q @ k.transpose(-2, -1)) * self.scale  # (B, H, T, T)
 
-        # ---- Learned Bias ----
         if self.b is not None:
             b = self.b(x)  # (B, T, H)
-            b = b.permute(0, 2, 1).unsqueeze(-2)  # (B, H, 1, T)
+            b = b.permute(0, 2, 1)  # (B, H, T)
 
-            if self.use_mask:
-                mask = (b > self.threshold)  # (B, H, 1, T)
+            # Appliquer le masking si nécessaire
+            if self.bias_threshold is not None or self.bias_topk is not None:
+                if self.bias_threshold is not None:
+                    mask = (b > self.bias_threshold)  # (B, H, T)
+                else:
+                    k = int(self.bias_topk * T)
+                    _, topk_indices = torch.topk(b, k, dim=-1)  # (B, H, K)
+                    mask = torch.zeros_like(b, dtype=torch.bool).scatter(-1, topk_indices, True)
 
-                # avoid the case where all tokens are masked for a given head, which would result in a division by zero in the softmax and NaN values in the attention output, we ensure that at least one token is kept for each head by unmasking the token with the highest bias value for that head
-                all_masked = ~mask.any(dim=-1, keepdim=True)  # (B, H, 1, 1)
-                idx = b.argmax(dim=-1, keepdim=True)  # (B, H, 1, 1)
+                # Éviter le cas où tous les tokens sont masqués
+                all_masked = ~mask.any(dim=-1, keepdim=True)  # (B, H, 1)
+                idx = b.argmax(dim=-1, keepdim=True)  # (B, H, 1)
                 mask = torch.where(all_masked, torch.zeros_like(mask).scatter(-1, idx, True), mask)
 
-                # metrics for monitoring the pruning ratio during training
-                pruned_tokens = (~mask).sum(dim=-1)  # (B, H, 1)
-                self.last_pruned_ratio.copy_((pruned_tokens / T).float().mean().detach())
+                # Appliquer le masque (mettre -inf sur les colonnes à ignorer)
+                b = torch.where(mask, b, float('-inf'))  # (B, H, T)
 
-                b = torch.where(mask, b, float('-inf'))
+                # Tracker le ratio de pruning
+                self.last_pruned_ratio = 1.0 - mask.float().mean()
 
-            attn = attn + b
+            attn = attn + b.unsqueeze(2)  # (B, H, T, T) + (B, H, 1, T)
 
-        # ---- Softmax ----
+        # Softmax et dropout
         attn = attn.softmax(dim=-1)
         attn = self.dropout(attn)
 
-        # ---- Output ----
-        out = attn @ v # (B, H, T, D)
-        out = out.transpose(1, 2).reshape(B, T, C) # (B, T, C)
+        # Appliquer l'attention aux valeurs
+        out = attn @ v  # (B, H, T, D)
+
+        # Reshape et projection finale
+        out = out.transpose(1, 2).reshape(B, T, C)
         out = self.out_proj(out)
 
         return out, attn
@@ -151,15 +159,16 @@ class EncoderBlock(nn.Module):
         mlp_dim: int,
         dropout: float,
         attention_dropout: float,
-        attention_bias: bool,
-        attention_mask: bool,
+        use_bias: bool,
+        bias_threshold: Optional[float],
+        bias_topk: Optional[float],
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
     ):
         super().__init__()
 
         # Attention block
         self.ln_1 = norm_layer(hidden_dim)
-        self.attention =  AttentionWithBias(hidden_dim, num_heads, dropout=attention_dropout, use_bias=attention_bias, use_mask=attention_mask)
+        self.attention =  AttentionWithBias(hidden_dim, num_heads, dropout=attention_dropout, use_bias=use_bias, bias_threshold=bias_threshold, bias_topk=bias_topk)
         self.dropout = nn.Dropout(dropout)
 
         # MLP block
@@ -190,8 +199,9 @@ class Encoder(nn.Module):
         mlp_dim: int,
         dropout: float,
         attention_dropout: float,
-        attention_bias: bool,
-        attention_mask: bool,
+        use_bias: bool,
+        bias_threshold: Optional[float],
+        bias_topk: Optional[list[float]],
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
     ):
         super().__init__()
@@ -207,8 +217,9 @@ class Encoder(nn.Module):
                 mlp_dim,
                 dropout,
                 attention_dropout,
-                attention_bias,
-                attention_mask,
+                use_bias,
+                bias_threshold,
+                bias_topk[i] if bias_topk is not None else None,
                 norm_layer,
             )
         self.layers = nn.Sequential(layers)
@@ -233,8 +244,9 @@ class VisionTransformer(nn.Module):
         mlp_dim: int,
         dropout: float = 0.0,
         attention_dropout: float = 0.0,
-        attention_bias: bool = False,
-        attention_mask: bool = False,
+        use_bias: bool = False,
+        bias_threshold: Optional[float] = None,
+        bias_topk: Optional[list[float]] = None,
         num_classes: int = 1000,
         representation_size: Optional[int] = None,
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
@@ -247,8 +259,9 @@ class VisionTransformer(nn.Module):
         self.patch_size = patch_size
         self.hidden_dim = hidden_dim
         self.mlp_dim = mlp_dim
-        self.attention_bias = attention_bias
-        self.attention_mask = attention_mask
+        self.use_bias = use_bias
+        self.bias_threshold = bias_threshold
+        self.bias_topk = bias_topk
         self.attention_dropout = attention_dropout
         self.dropout = dropout
         self.num_classes = num_classes
@@ -295,8 +308,9 @@ class VisionTransformer(nn.Module):
             mlp_dim,
             dropout,
             attention_dropout,
-            attention_bias,
-            attention_mask,
+            use_bias,
+            bias_threshold,
+            bias_topk,
             norm_layer,
         )
         self.seq_length = seq_length
@@ -382,8 +396,9 @@ def _vision_transformer(
     mlp_dim: int,
     weights: Optional[WeightsEnum],
     progress: bool,
-    attention_bias: bool = False,
-    attention_mask: bool = False,
+    use_bias: bool = False,
+    bias_threshold: Optional[float] = None,
+    bias_topk: Optional[list[float]] = None,
     **kwargs: Any,
 ) -> VisionTransformer:
     if weights is not None:
@@ -399,8 +414,9 @@ def _vision_transformer(
         num_heads=num_heads,
         hidden_dim=hidden_dim,
         mlp_dim=mlp_dim,
-        attention_bias=attention_bias,
-        attention_mask=attention_mask,
+        use_bias=use_bias,
+        bias_threshold=bias_threshold,
+        bias_topk=bias_topk,
         **kwargs,
     )
 
@@ -531,7 +547,7 @@ def vit_b_16(*, weights: Optional[ViT_B_16_Weights] = None, progress: bool = Tru
         **kwargs,
     )
 
-def vit_custom(*, weights = None, progress: bool = True, attention_bias: bool = False, attention_mask: bool = False, **kwargs: Any) -> VisionTransformer:
+def vit_custom(*, weights = None, progress: bool = True, use_bias: bool = False, bias_threshold: Optional[float] = None, bias_topk: Optional[list[float]] = None, **kwargs: Any) -> VisionTransformer:
     return _vision_transformer(
         patch_size=16,
         num_layers=12,
@@ -540,7 +556,8 @@ def vit_custom(*, weights = None, progress: bool = True, attention_bias: bool = 
         mlp_dim=4*384,
         weights=weights,
         progress=progress,
-        attention_bias=attention_bias,
-        attention_mask=attention_mask,
+        use_bias=use_bias,
+        bias_threshold=bias_threshold,
+        bias_topk=bias_topk,
         **kwargs,
     )

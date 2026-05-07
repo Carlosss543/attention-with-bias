@@ -12,7 +12,7 @@ print(f"Device: {device}:{torch.cuda.current_device()} {torch.cuda.get_device_na
 
 
 # --- load model ---
-model = vit_custom(num_classes=params.num_classes, image_size=params.crop_size, attention_bias=params.attention_bias, attention_mask=params.attention_mask).to(device)
+model = vit_custom(num_classes=params.num_classes, image_size=params.crop_size, use_bias=params.use_bias, bias_threshold=params.bias_threshold, bias_topk=params.bias_topk).to(device)
 model = torch.compile(model)
 print(f"Custom ViT number of parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.4f}M")
 
@@ -51,12 +51,12 @@ run = wandb.init(
 for epoch in tqdm(range(1, params.num_epochs + 1), desc="Epochs"):
     train_one_epoch(train_loader, model, criterion_train, optimizer, device, scaler)
     lr_scheduler.step()
-    val_one_epoch(val_loader, model, criterion_val, device)
+    _ = val_one_epoch(val_loader, model, criterion_val, device, wandb_log=True)
 
     if params.checkpoints_interval is not None and epoch % params.checkpoints_interval == 0:
         checkpoint = {
             "epoch": epoch,
-            "model_state_dict": model._orig_mod.state_dict(),
+            "model_state_dict": model._orig_mod.state_dict() if isinstance(model, torch.compile._WrappedModule) else model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "lr_scheduler_state_dict": lr_scheduler.state_dict(),
             "scaler_state_dict": scaler.state_dict(),

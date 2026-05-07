@@ -10,7 +10,7 @@ import training_parameters as params
 from torch.utils.data.dataloader import default_collate
 
 
-def _get_attention_pruning_metrics(model):
+def get_attention_pruning_metrics(model):
     base_model = model._orig_mod if hasattr(model, "_orig_mod") else model
 
     pruned_ratios = []
@@ -18,10 +18,8 @@ def _get_attention_pruning_metrics(model):
         if hasattr(module, "last_pruned_ratio"):
             pruned_ratios.append(module.last_pruned_ratio.detach().item())
 
-    if not pruned_ratios:
-        return None
-
     avg_pruned_ratio = sum(pruned_ratios) / len(pruned_ratios)
+    
     return avg_pruned_ratio
 
 
@@ -44,8 +42,8 @@ def get_data_loaders(batch_size, persistent_workers=True, shuffle_val=False):
         transforms.Normalize(mean=mean, std=std)
     ])
 
-    train_dataset = datasets.ImageFolder("data/imagenet100/train", transform=train_transform)
-    val_dataset = datasets.ImageFolder("data/imagenet100/val", transform=val_transform)
+    train_dataset = datasets.ImageFolder("/data_fast/data_charles/imagenet100/train", transform=train_transform)
+    val_dataset = datasets.ImageFolder("/data_fast/data_charles/imagenet100/val", transform=val_transform)
 
     # add cutmix and mixup to the training dataset
     mixup_cutmix = get_mixup_cutmix(mixup_alpha=params.mixup_alpha, cutmix_alpha=params.cutmix_alpha, num_classes=params.num_classes, use_v2=False)
@@ -55,8 +53,8 @@ def get_data_loaders(batch_size, persistent_workers=True, shuffle_val=False):
     else:
         collate_fn = default_collate
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=8, pin_memory=True, persistent_workers=persistent_workers, collate_fn=collate_fn) # num_workers=8 pour imagenet1100, 4 pour tiny imagenet
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=shuffle_val, num_workers=4, pin_memory=True, persistent_workers=persistent_workers) # num_workers=4 pour imagenet1100, 2 pour tiny imagenet
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=12, pin_memory=True, persistent_workers=persistent_workers, collate_fn=collate_fn)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=shuffle_val, num_workers=4, pin_memory=True, persistent_workers=persistent_workers)
 
     # # display some image samples in results/augmented_images.png
     # sample_imgs, _ = next(iter(train_loader))
@@ -78,6 +76,8 @@ def train_one_epoch(train_loader, model, criterion, optimizer, device, scaler, l
 
     total_loss = 0.0
     total_samples = 0
+    total_pruning_ratio = 0.0
+    total_batches = 0
 
     for i, (imgs, labels) in enumerate(tqdm(train_loader, total=len(train_loader), desc="Training", leave=False)):
         imgs, labels = imgs.to(device), labels.to(device)
@@ -96,28 +96,29 @@ def train_one_epoch(train_loader, model, criterion, optimizer, device, scaler, l
 
         total_loss += loss.item() * imgs.size(0)
         total_samples += labels.size(0)
+        total_pruning_ratio += get_attention_pruning_metrics(model)
+        total_batches += 1
 
         # send batch loss to W&B occasionally
         if (i+1) % log_interval == 0:
-            avg_pruned_ratio = _get_attention_pruning_metrics(model)
-            log_payload = {"batch_train_loss": loss.item()}
-            if avg_pruned_ratio is not None:
-                log_payload["batch_avg_pruned_tokens_ratio"] = avg_pruned_ratio
-            wandb.log(log_payload)
+            wandb.log({"batch_train_loss": loss.item()})
 
     avg_loss = total_loss / total_samples
+    avg_pruning_ratio = total_pruning_ratio / total_batches
 
     current_lr = optimizer.param_groups[0]['lr']
-    wandb.log({"train_loss": avg_loss, "learning_rate": current_lr})
+    wandb.log({"train_loss": avg_loss, "learning_rate": current_lr, "train_avg_pruned_ratio": avg_pruning_ratio})
 
 
-def val_one_epoch(val_loader, model, criterion, device):
+def val_one_epoch(val_loader, model, criterion, device, wandb_log=True):
     model.eval()
 
     total_loss = 0.0
     total_correct = 0
     total_correct_top5 = 0
     total_samples = 0
+    total_pruning_ratio = 0.0
+    total_batches = 0
 
     with torch.no_grad():
         for imgs, labels in tqdm(val_loader, total=len(val_loader), desc="Validation", leave=False):
@@ -130,11 +131,16 @@ def val_one_epoch(val_loader, model, criterion, device):
             total_loss += loss.item() * imgs.size(0)
             total_correct += (torch.argmax(output, dim=1) == labels).sum().item()
             total_correct_top5 += (torch.topk(output, k=5, dim=1).indices == labels.unsqueeze(1)).any(dim=1).sum().item()
-            
             total_samples += labels.size(0)
+            total_pruning_ratio += get_attention_pruning_metrics(model)
+            total_batches += 1
 
     avg_loss = total_loss / total_samples
     avg_acc = total_correct / total_samples
     avg_acc_top5 = total_correct_top5 / total_samples
+    avg_pruning_ratio = total_pruning_ratio / total_batches
 
-    wandb.log({"val_loss": avg_loss, "val_acc": avg_acc, "val_acc_top5": avg_acc_top5})
+    if wandb_log:
+        wandb.log({"val_loss": avg_loss, "val_acc": avg_acc, "val_acc_top5": avg_acc_top5, "val_avg_pruned_ratio": avg_pruning_ratio})
+
+    return avg_loss, avg_acc, avg_acc_top5, avg_pruning_ratio
