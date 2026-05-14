@@ -54,9 +54,10 @@ for epoch in tqdm(range(1, params.num_epochs + 1), desc="Epochs"):
     _ = val_one_epoch(val_loader, model, criterion_val, device, wandb_log=True)
 
     if params.checkpoints_interval is not None and epoch % params.checkpoints_interval == 0:
+        model_to_save = getattr(model, "_orig_mod", model) # Unwrap the model if it's wrapped by torch.compile
         checkpoint = {
             "epoch": epoch,
-            "model_state_dict": model._orig_mod.state_dict() if isinstance(model, torch.compile._WrappedModule) else model.state_dict(),
+            "model_state_dict": model_to_save.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "lr_scheduler_state_dict": lr_scheduler.state_dict(),
             "scaler_state_dict": scaler.state_dict(),
