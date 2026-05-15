@@ -19,9 +19,9 @@ clip_grad_norm = 1.0
 
 model_type = "vit_custom"
 use_bias = True
-bias_threshold = None #-1.0
-bias_topk = None #[0.8]*6 + [0.4]*6
-bias_score_threshold = 0.9
+bias_threshold = None
+bias_topk = None
+bias_score_threshold = [0.8]*12
 
 checkpoints_interval = 50
-folder_number = 2
+folder_number = 3
