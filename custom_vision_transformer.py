@@ -214,7 +214,7 @@ class Encoder(nn.Module):
         use_bias: bool,
         bias_threshold: Optional[float],
         bias_topk: Optional[list[float]],
-        bias_score_threshold: Optional[float],
+        bias_score_threshold:  Optional[list[float]],
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
     ):
         super().__init__()
@@ -233,7 +233,7 @@ class Encoder(nn.Module):
                 use_bias,
                 bias_threshold,
                 bias_topk[i] if bias_topk is not None else None,
-                bias_score_threshold,
+                bias_score_threshold[i] if bias_score_threshold is not None else None,
                 norm_layer,
             )
         self.layers = nn.Sequential(layers)
@@ -261,7 +261,7 @@ class VisionTransformer(nn.Module):
         use_bias: bool = False,
         bias_threshold: Optional[float] = None,
         bias_topk: Optional[list[float]] = None,
-        bias_score_threshold: Optional[float] = None,
+        bias_score_threshold: Optional[list[float]] = None,
         num_classes: int = 1000,
         representation_size: Optional[int] = None,
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
@@ -416,7 +416,7 @@ def _vision_transformer(
     use_bias: bool = False,
     bias_threshold: Optional[float] = None,
     bias_topk: Optional[list[float]] = None,
-    bias_score_threshold: Optional[float] = None,
+    bias_score_threshold: Optional[list[float]] = None,
     **kwargs: Any,
 ) -> VisionTransformer:
     if weights is not None:
@@ -566,7 +566,7 @@ def vit_b_16(*, weights: Optional[ViT_B_16_Weights] = None, progress: bool = Tru
         **kwargs,
     )
 
-def vit_custom(*, weights = None, progress: bool = True, use_bias: bool = False, bias_threshold: Optional[float] = None, bias_topk: Optional[list[float]] = None, bias_score_threshold: Optional[float] = None, **kwargs: Any) -> VisionTransformer:
+def vit_custom(*, weights = None, progress: bool = True, use_bias: bool = False, bias_threshold: Optional[float] = None, bias_topk: Optional[list[float]] = None, bias_score_threshold: Optional[list[float]] = None, **kwargs: Any) -> VisionTransformer:
     return _vision_transformer(
         patch_size=16,
         num_layers=12,
