@@ -74,7 +74,7 @@ class MLPBlock(MLP):
 
 
 class AttentionWithBias(nn.Module):
-    def __init__(self, hidden_dim, num_heads, dropout: float = 0.0, use_bias: bool = False, bias_threshold: float = None, bias_topk: float = None, bias_score_threshold: float = None):
+    def __init__(self, hidden_dim, num_heads, dropout: float = 0.0, use_bias: bool = False, bias_threshold: float = None, bias_topk: float = None, bias_score_threshold: float = None, bias_only: bool = False):
         super().__init__()
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisible by num_heads"
 
@@ -97,6 +97,7 @@ class AttentionWithBias(nn.Module):
         self.bias_threshold = bias_threshold
         self.bias_topk = bias_topk
         self.bias_score_threshold = bias_score_threshold
+        self.bias_only = bias_only
         self.register_buffer("last_pruned_ratio", torch.tensor(0.0), persistent=False)
 
     def forward(self, x):
@@ -144,7 +145,11 @@ class AttentionWithBias(nn.Module):
                 # Tracker le ratio de pruning
                 self.last_pruned_ratio = 1.0 - mask.float().mean()
 
-            attn = attn + b.unsqueeze(2)  # (B, H, T, T) + (B, H, 1, T)
+            if self.bias_only:
+                b = b.unsqueeze(2)  # (B, H, T) -> (B, H, 1, T)
+                attn = b.expand(-1, -1, T, -1)  # (B, H, 1, T) -> (B, H, T, T)
+            else:
+                attn = attn + b.unsqueeze(2)  # (B, H, T, T) + (B, H, 1, T)
 
         # Softmax et dropout
         attn = attn.softmax(dim=-1)
@@ -174,13 +179,14 @@ class EncoderBlock(nn.Module):
         bias_threshold: Optional[float],
         bias_topk: Optional[float],
         bias_score_threshold: Optional[float],
+        bias_only: Optional[bool],
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
     ):
         super().__init__()
 
         # Attention block
         self.ln_1 = norm_layer(hidden_dim)
-        self.attention =  AttentionWithBias(hidden_dim, num_heads, dropout=attention_dropout, use_bias=use_bias, bias_threshold=bias_threshold, bias_topk=bias_topk, bias_score_threshold=bias_score_threshold)
+        self.attention =  AttentionWithBias(hidden_dim, num_heads, dropout=attention_dropout, use_bias=use_bias, bias_threshold=bias_threshold, bias_topk=bias_topk, bias_score_threshold=bias_score_threshold, bias_only=bias_only)
         self.dropout = nn.Dropout(dropout)
 
         # MLP block
@@ -215,6 +221,7 @@ class Encoder(nn.Module):
         bias_threshold: Optional[float],
         bias_topk: Optional[list[float]],
         bias_score_threshold:  Optional[list[float]],
+        bias_only: Optional[list[bool]],
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
     ):
         super().__init__()
@@ -234,6 +241,7 @@ class Encoder(nn.Module):
                 bias_threshold,
                 bias_topk[i] if bias_topk is not None else None,
                 bias_score_threshold[i] if bias_score_threshold is not None else None,
+                bias_only[i] if bias_only is not None else False,
                 norm_layer,
             )
         self.layers = nn.Sequential(layers)
@@ -262,6 +270,7 @@ class VisionTransformer(nn.Module):
         bias_threshold: Optional[float] = None,
         bias_topk: Optional[list[float]] = None,
         bias_score_threshold: Optional[list[float]] = None,
+        bias_only: Optional[list[bool]] = None,
         num_classes: int = 1000,
         representation_size: Optional[int] = None,
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
@@ -278,6 +287,7 @@ class VisionTransformer(nn.Module):
         self.bias_threshold = bias_threshold
         self.bias_topk = bias_topk
         self.bias_score_threshold = bias_score_threshold
+        self.bias_only = bias_only
         self.attention_dropout = attention_dropout
         self.dropout = dropout
         self.num_classes = num_classes
@@ -328,6 +338,7 @@ class VisionTransformer(nn.Module):
             bias_threshold,
             bias_topk,
             bias_score_threshold,
+            bias_only,
             norm_layer,
         )
         self.seq_length = seq_length
@@ -417,6 +428,7 @@ def _vision_transformer(
     bias_threshold: Optional[float] = None,
     bias_topk: Optional[list[float]] = None,
     bias_score_threshold: Optional[list[float]] = None,
+    bias_only: Optional[list[bool]] = None,
     **kwargs: Any,
 ) -> VisionTransformer:
     if weights is not None:
@@ -436,6 +448,7 @@ def _vision_transformer(
         bias_threshold=bias_threshold,
         bias_topk=bias_topk,
         bias_score_threshold=bias_score_threshold,
+        bias_only=bias_only,
         **kwargs,
     )
 
@@ -566,7 +579,7 @@ def vit_b_16(*, weights: Optional[ViT_B_16_Weights] = None, progress: bool = Tru
         **kwargs,
     )
 
-def vit_custom(*, weights = None, progress: bool = True, use_bias: bool = False, bias_threshold: Optional[float] = None, bias_topk: Optional[list[float]] = None, bias_score_threshold: Optional[list[float]] = None, **kwargs: Any) -> VisionTransformer:
+def vit_custom(*, weights = None, progress: bool = True, use_bias: bool = False, bias_threshold: Optional[float] = None, bias_topk: Optional[list[float]] = None, bias_score_threshold: Optional[list[float]] = None, bias_only: Optional[list[bool]] = None, **kwargs: Any) -> VisionTransformer:
     return _vision_transformer(
         patch_size=16,
         num_layers=12,
@@ -579,5 +592,6 @@ def vit_custom(*, weights = None, progress: bool = True, use_bias: bool = False,
         bias_threshold=bias_threshold,
         bias_topk=bias_topk,
         bias_score_threshold=bias_score_threshold,
+        bias_only=bias_only,
         **kwargs,
     )

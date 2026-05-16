@@ -21,7 +21,8 @@ model_type = "vit_custom"
 use_bias = True
 bias_threshold = None
 bias_topk = None
-bias_score_threshold = [0.8]*12
+bias_score_threshold = None
+bias_only = [False]*8 + [True]*4
 
 checkpoints_interval = 50
-folder_number = 3
+folder_number = 5
