@@ -105,14 +105,6 @@ class AttentionWithBias(nn.Module):
         B, T, C = x.shape
         H, D = self.num_heads, self.head_dim
 
-        # Projections Q, K, V
-        q = self.q(x).reshape(B, T, H, D).transpose(1, 2)  # (B, H, T, D)
-        k = self.k(x).reshape(B, T, H, D).transpose(1, 2)  # (B, H, T, D)
-        v = self.v(x).reshape(B, T, H, D).transpose(1, 2)  # (B, H, T, D)
-
-        # Classic attention
-        attn = (q @ k.transpose(-2, -1)) * self.scale  # (B, H, T, T)
-
         if self.b is not None:
             b = self.b(x)  # (B, T, H)
             b = b.permute(0, 2, 1)  # (B, H, T)
@@ -156,7 +148,17 @@ class AttentionWithBias(nn.Module):
                 b = b.unsqueeze(2)  # (B, H, T) -> (B, H, 1, T)
                 attn = b.expand(-1, -1, T, -1)  # (B, H, 1, T) -> (B, H, T, T)
             else:
+                q = self.q(x).reshape(B, T, H, D).transpose(1, 2)  # (B, H, T, D)
+                k = self.k(x).reshape(B, T, H, D).transpose(1, 2)  # (B, H, T, D)
+                attn = (q @ k.transpose(-2, -1)) * self.scale  # (B, H, T, T)
                 attn = attn + b.unsqueeze(2)  # (B, H, T, T) + (B, H, 1, T)
+
+        else:
+            q = self.q(x).reshape(B, T, H, D).transpose(1, 2)  # (B, H, T, D)
+            k = self.k(x).reshape(B, T, H, D).transpose(1, 2)  # (B, H, T, D)
+            attn = (q @ k.transpose(-2, -1)) * self.scale  # (B, H, T, T)
+
+        v = self.v(x).reshape(B, T, H, D).transpose(1, 2)  # (B, H, T, D)
 
         # Softmax et dropout
         attn = attn.softmax(dim=-1)
