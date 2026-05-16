@@ -74,7 +74,7 @@ class MLPBlock(MLP):
 
 
 class AttentionWithBias(nn.Module):
-    def __init__(self, hidden_dim, num_heads, dropout: float = 0.0, use_bias: bool = False, bias_threshold: float = None, bias_topk: float = None, bias_score_threshold: float = None, bias_only: bool = False):
+    def __init__(self, hidden_dim, num_heads, dropout: float = 0.0, use_bias: bool = False, bias_threshold: float = None, bias_topk: float = None, bias_score_threshold: float = None, bias_random_prune: float = None, bias_only: bool = False):
         super().__init__()
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisible by num_heads"
 
@@ -97,6 +97,7 @@ class AttentionWithBias(nn.Module):
         self.bias_threshold = bias_threshold
         self.bias_topk = bias_topk
         self.bias_score_threshold = bias_score_threshold
+        self.bias_random_prune = bias_random_prune
         self.bias_only = bias_only
         self.register_buffer("last_pruned_ratio", torch.tensor(0.0), persistent=False)
 
@@ -117,7 +118,7 @@ class AttentionWithBias(nn.Module):
             b = b.permute(0, 2, 1)  # (B, H, T)
 
             # Appliquer le masking si nécessaire
-            if self.bias_threshold is not None or self.bias_topk is not None or self.bias_score_threshold is not None:
+            if self.bias_threshold is not None or self.bias_topk is not None or self.bias_score_threshold is not None or self.bias_random_prune is not None:
 
                 if self.bias_threshold is not None:
                     mask = (b > self.bias_threshold)  # (B, H, T)
@@ -127,12 +128,18 @@ class AttentionWithBias(nn.Module):
                     _, topk_indices = torch.topk(b, k, dim=-1)  # (B, H, K)
                     mask = torch.zeros_like(b, dtype=torch.bool).scatter(-1, topk_indices, True)
 
-                else:
+                elif self.bias_score_threshold is not None:
                     bias_score = torch.softmax(b, dim=-1)  # (B, H, T)
                     sorted_scores, sorted_indices = torch.sort(bias_score, dim=-1, descending=True)  # (B, H, T)
                     cumsum_scores = torch.cumsum(sorted_scores, dim=-1)  # (B, H, T)
                     mask_sorted = (cumsum_scores <= self.bias_score_threshold)  # (B, H, T)
                     mask = torch.zeros_like(b, dtype=torch.bool).scatter_(-1, sorted_indices, mask_sorted)  # (B, H, T)
+
+                else:
+                    k = int(self.bias_random_prune * T)
+                    rand_vals = torch.rand(B, H, T, device=b.device)  # Valeurs aléatoires
+                    _, topk_indices = torch.topk(rand_vals, k, dim=-1)  # Top-k aléatoire
+                    mask = torch.zeros_like(b, dtype=torch.bool).scatter(-1, topk_indices, True)
 
                 # Éviter le cas où tous les tokens sont masqués
                 all_masked = ~mask.any(dim=-1, keepdim=True)  # (B, H, 1)
@@ -179,6 +186,7 @@ class EncoderBlock(nn.Module):
         bias_threshold: Optional[float],
         bias_topk: Optional[float],
         bias_score_threshold: Optional[float],
+        bias_random_prune: Optional[float],
         bias_only: Optional[bool],
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
     ):
@@ -186,7 +194,7 @@ class EncoderBlock(nn.Module):
 
         # Attention block
         self.ln_1 = norm_layer(hidden_dim)
-        self.attention =  AttentionWithBias(hidden_dim, num_heads, dropout=attention_dropout, use_bias=use_bias, bias_threshold=bias_threshold, bias_topk=bias_topk, bias_score_threshold=bias_score_threshold, bias_only=bias_only)
+        self.attention =  AttentionWithBias(hidden_dim, num_heads, dropout=attention_dropout, use_bias=use_bias, bias_threshold=bias_threshold, bias_topk=bias_topk, bias_score_threshold=bias_score_threshold, bias_random_prune=bias_random_prune, bias_only=bias_only)
         self.dropout = nn.Dropout(dropout)
 
         # MLP block
@@ -221,6 +229,7 @@ class Encoder(nn.Module):
         bias_threshold: Optional[float],
         bias_topk: Optional[list[float]],
         bias_score_threshold:  Optional[list[float]],
+        bias_random_prune: Optional[float],
         bias_only: Optional[list[bool]],
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
     ):
@@ -241,6 +250,7 @@ class Encoder(nn.Module):
                 bias_threshold,
                 bias_topk[i] if bias_topk is not None else None,
                 bias_score_threshold[i] if bias_score_threshold is not None else None,
+                bias_random_prune,
                 bias_only[i] if bias_only is not None else False,
                 norm_layer,
             )
@@ -270,6 +280,7 @@ class VisionTransformer(nn.Module):
         bias_threshold: Optional[float] = None,
         bias_topk: Optional[list[float]] = None,
         bias_score_threshold: Optional[list[float]] = None,
+        bias_random_prune: Optional[float] = None,
         bias_only: Optional[list[bool]] = None,
         num_classes: int = 1000,
         representation_size: Optional[int] = None,
@@ -287,6 +298,7 @@ class VisionTransformer(nn.Module):
         self.bias_threshold = bias_threshold
         self.bias_topk = bias_topk
         self.bias_score_threshold = bias_score_threshold
+        self.bias_random_prune = bias_random_prune
         self.bias_only = bias_only
         self.attention_dropout = attention_dropout
         self.dropout = dropout
@@ -338,6 +350,7 @@ class VisionTransformer(nn.Module):
             bias_threshold,
             bias_topk,
             bias_score_threshold,
+            bias_random_prune,
             bias_only,
             norm_layer,
         )
@@ -428,6 +441,7 @@ def _vision_transformer(
     bias_threshold: Optional[float] = None,
     bias_topk: Optional[list[float]] = None,
     bias_score_threshold: Optional[list[float]] = None,
+    bias_random_prune: Optional[float] = None,
     bias_only: Optional[list[bool]] = None,
     **kwargs: Any,
 ) -> VisionTransformer:
@@ -448,6 +462,7 @@ def _vision_transformer(
         bias_threshold=bias_threshold,
         bias_topk=bias_topk,
         bias_score_threshold=bias_score_threshold,
+        bias_random_prune=bias_random_prune,
         bias_only=bias_only,
         **kwargs,
     )
@@ -579,7 +594,7 @@ def vit_b_16(*, weights: Optional[ViT_B_16_Weights] = None, progress: bool = Tru
         **kwargs,
     )
 
-def vit_custom(*, weights = None, progress: bool = True, use_bias: bool = False, bias_threshold: Optional[float] = None, bias_topk: Optional[list[float]] = None, bias_score_threshold: Optional[list[float]] = None, bias_only: Optional[list[bool]] = None, **kwargs: Any) -> VisionTransformer:
+def vit_custom(*, weights = None, progress: bool = True, use_bias: bool = False, bias_threshold: Optional[float] = None, bias_topk: Optional[list[float]] = None, bias_score_threshold: Optional[list[float]] = None, bias_random_prune: Optional[float] = None, bias_only: Optional[list[bool]] = None, **kwargs: Any) -> VisionTransformer:
     return _vision_transformer(
         patch_size=16,
         num_layers=12,
@@ -592,6 +607,7 @@ def vit_custom(*, weights = None, progress: bool = True, use_bias: bool = False,
         bias_threshold=bias_threshold,
         bias_topk=bias_topk,
         bias_score_threshold=bias_score_threshold,
+        bias_random_prune=bias_random_prune,
         bias_only=bias_only,
         **kwargs,
     )

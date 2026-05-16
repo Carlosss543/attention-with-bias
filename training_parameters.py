@@ -22,7 +22,8 @@ use_bias = True
 bias_threshold = None
 bias_topk = None
 bias_score_threshold = None
+bias_random_prune = None
 bias_only = [False]*8 + [True]*4
 
 checkpoints_interval = 50
-folder_number = 5
+folder_number = 8
