@@ -1,9 +1,9 @@
 import torch
-from custom_vision_transformer import vit_custom
-from training_utils import *
-import training_parameters as params
 import wandb
 import os
+from custom_vision_transformer import custom_vit_s_16
+from model_training_code.training_utils import *
+import model_training_code.training_parameters as params
 
 
 # --- device ---
@@ -12,7 +12,7 @@ print(f"Device: {device}:{torch.cuda.current_device()} {torch.cuda.get_device_na
 
 
 # --- load model ---
-model = vit_custom(num_classes=params.num_classes, image_size=params.crop_size, use_bias=params.use_bias, bias_threshold=params.bias_threshold, bias_topk=params.bias_topk, bias_score_threshold=params.bias_score_threshold, bias_random_prune=params.bias_random_prune, bias_only=params.bias_only).to(device)
+model = custom_vit_s_16(num_classes=params.num_classes, image_size=params.crop_size, use_bias=params.use_bias, bias_only=params.bias_only, bias_topk=params.bias_topk, bias_score_threshold=params.bias_score_threshold).to(device)
 model = torch.compile(model)
 print(f"Custom ViT number of parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.4f}M")
 
@@ -43,7 +43,7 @@ run = wandb.init(
     dir="./wandb_logs",
     config=config,
     group=f"{params.dataset_name}",
-    mode="online"  # online/disabled
+    mode="disabled"  # online/disabled
 )
 
 

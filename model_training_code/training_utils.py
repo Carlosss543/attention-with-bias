@@ -4,10 +4,10 @@ import torch
 from tqdm import tqdm
 import wandb
 from torchvision.transforms.functional import InterpolationMode
-import matplotlib.pyplot as plt
-from mixup_cutmix import get_mixup_cutmix
-import training_parameters as params
 from torch.utils.data.dataloader import default_collate
+import matplotlib.pyplot as plt
+from model_training_code.mixup_cutmix import get_mixup_cutmix
+import model_training_code.training_parameters as params
 
 
 def get_attention_pruning_metrics(model):
@@ -65,7 +65,7 @@ def get_data_loaders(batch_size, persistent_workers=True, shuffle_val=False):
     # for i, ax in enumerate(axes.flat):
     #     ax.imshow(sample_imgs[i])
     #     ax.axis('off')
-    # plt.savefig("results/augmented_images.png")
+    # plt.savefig("../results/augmented_images.png")
     # plt.close()
 
     return train_loader, val_loader

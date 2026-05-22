@@ -1,15 +1,12 @@
-def mean(L):
-    return sum(L) / len(L)
-
-
 def convert_qkv_to_q_k_v(state_dict):
     new_state_dict = {}
 
     for key, value in state_dict.items():
+        new_key = key.replace(".attention.", ".self_attention.")
 
         # --- QKV SPLIT ---
         if "attention.qkv.weight" in key:
-            base = key.replace("qkv.weight", "")
+            base = new_key.replace("qkv.weight", "")
             q, k, v = value.chunk(3, dim=0)
 
             new_state_dict[base + "q.weight"] = q
@@ -17,7 +14,7 @@ def convert_qkv_to_q_k_v(state_dict):
             new_state_dict[base + "v.weight"] = v
 
         elif "attention.qkv.bias" in key:
-            base = key.replace("qkv.bias", "")
+            base = new_key.replace("qkv.bias", "")
             q, k, v = value.chunk(3, dim=0)
 
             new_state_dict[base + "q.bias"] = q
@@ -30,6 +27,6 @@ def convert_qkv_to_q_k_v(state_dict):
 
         # --- KEEP EVERYTHING ELSE ---
         else:
-            new_state_dict[key] = value
+            new_state_dict[new_key] = value
 
     return new_state_dict

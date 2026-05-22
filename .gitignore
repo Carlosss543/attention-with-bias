@@ -1,7 +1,6 @@
 __pycache__/
-
-attention_maps/*
-!attention_maps/.gitkeep
+model_analysis_code/__pycache__/
+model_training_code/__pycache__/
 
 data/*
 !data/.gitkeep
@@ -9,10 +8,10 @@ data/*
 results/*
 !results/.gitkeep
 
+test_codes/
+
 training_checkpoints/*
 !training_checkpoints/.gitkeep
 
 wandb_logs/*
 !wandb_logs/.gitkeep
-
-test_codes/

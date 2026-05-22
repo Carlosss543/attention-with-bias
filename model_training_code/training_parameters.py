@@ -17,13 +17,11 @@ mixup_alpha = 0.2
 cutmix_alpha = 1.0
 clip_grad_norm = 1.0
 
-model_type = "vit_custom"
+model_type = "custom_vit_s_16"
 use_bias = True
-bias_threshold = None
+bias_only = None
 bias_topk = None
 bias_score_threshold = None
-bias_random_prune = None
-bias_only = [False]*6 + [True]*6
 
 checkpoints_interval = 50
-folder_number = 8
+folder_number = 15
