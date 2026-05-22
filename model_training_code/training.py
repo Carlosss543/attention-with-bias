@@ -1,7 +1,7 @@
 import torch
 import wandb
 import os
-from custom_vision_transformer import custom_vit_s_16
+from custom_vision_transformer import custom_vit_t_16, custom_vit_s_16
 from model_training_code.training_utils import *
 import model_training_code.training_parameters as params
 
@@ -12,7 +12,7 @@ print(f"Device: {device}:{torch.cuda.current_device()} {torch.cuda.get_device_na
 
 
 # --- load model ---
-model = custom_vit_s_16(num_classes=params.num_classes, image_size=params.crop_size, use_bias=params.use_bias, bias_only=params.bias_only, bias_topk=params.bias_topk, bias_score_threshold=params.bias_score_threshold).to(device)
+model = custom_vit_t_16(num_classes=params.num_classes, image_size=params.crop_size, use_bias=params.use_bias, bias_only=params.bias_only, bias_topk=params.bias_topk, bias_score_threshold=params.bias_score_threshold).to(device)
 model = torch.compile(model)
 print(f"Custom ViT number of parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.4f}M")
 
