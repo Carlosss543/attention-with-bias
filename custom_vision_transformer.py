@@ -582,3 +582,19 @@ def custom_vit_s_16(*, weights = None, progress: bool = True, use_bias: bool = F
         bias_score_threshold=bias_score_threshold,
         **kwargs,
     )
+
+def custom_vit_t_16(*, weights = None, progress: bool = True, use_bias: bool = False, bias_only: Optional[list[bool]] = None, bias_topk: Optional[list[float]] = None, bias_score_threshold: Optional[list[float]] = None, **kwargs: Any) -> VisionTransformer:
+    return _vision_transformer(
+        patch_size=16,
+        num_layers=12,
+        num_heads=3,
+        hidden_dim=192,
+        mlp_dim=4*192,
+        weights=weights,
+        progress=progress,
+        use_bias=use_bias,
+        bias_only=bias_only,
+        bias_topk=bias_topk,
+        bias_score_threshold=bias_score_threshold,
+        **kwargs,
+    )
