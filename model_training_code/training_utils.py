@@ -1,5 +1,8 @@
 from torchvision import transforms, datasets
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
+from PIL import Image
+import pandas as pd
+import os
 import torch
 from tqdm import tqdm
 import wandb
@@ -23,6 +26,37 @@ def get_attention_pruning_metrics(model):
     return avg_pruned_ratio
 
 
+class ImageNetVal(Dataset):
+    def __init__(self, img_dir, csv_path, synset_mapping_path, transform=None):
+        self.img_dir = img_dir
+        self.transform = transform
+        
+        self.synset_to_class = {}
+        with open(synset_mapping_path, 'r') as f:
+            for idx, line in enumerate(f):
+                synset = line.split()[0]
+                self.synset_to_class[synset] = idx
+        
+        df = pd.read_csv(csv_path)
+        self.samples = []
+        for _, row in df.iterrows():
+            image_id = row['ImageId']
+            synset = row['PredictionString'].split()[0]
+            class_idx = self.synset_to_class[synset]
+            img_path = os.path.join(self.img_dir, f'{image_id}.JPEG')
+            self.samples.append((img_path, class_idx))
+
+    def __len__(self):
+        return len(self.samples)
+    
+    def __getitem__(self, idx):
+        img_path, label = self.samples[idx]
+        image = Image.open(img_path).convert('RGB')
+        if self.transform:
+            image = self.transform(image)
+        return image, label
+
+
 def get_data_loaders(batch_size, persistent_workers=True, shuffle_val=False):
 
     mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]  # mean and std for ImageNet
@@ -42,8 +76,14 @@ def get_data_loaders(batch_size, persistent_workers=True, shuffle_val=False):
         transforms.Normalize(mean=mean, std=std)
     ])
 
-    train_dataset = datasets.ImageFolder("/data_fast/data_charles/imagenet100/train", transform=train_transform)
-    val_dataset = datasets.ImageFolder("/data_fast/data_charles/imagenet100/val", transform=val_transform)
+    if params.dataset_name == "ImageNet100":
+        train_dataset = datasets.ImageFolder("/data_fast/data_charles/imagenet100/train", transform=train_transform)
+        val_dataset = datasets.ImageFolder("/data_fast/data_charles/imagenet100/val", transform=val_transform)
+    elif params.dataset_name == "ImageNet1k":
+        train_dataset = datasets.ImageFolder("/data_fast/data_charles/imagenet1k/ILSVRC/Data/CLS-LOC/train", transform=train_transform)
+        val_dataset = ImageNetVal(img_dir="/data_fast/data_charles/imagenet1k/ILSVRC/Data/CLS-LOC/val", csv_path="/data_fast/data_charles/imagenet1k/LOC_val_solution.csv", synset_mapping_path="/data_fast/data_charles/imagenet1k/LOC_synset_mapping.txt", transform=val_transform)
+    else:
+        raise ValueError(f"Unsupported dataset: {params.dataset_name}")
 
     # add cutmix and mixup to the training dataset
     mixup_cutmix = get_mixup_cutmix(mixup_alpha=params.mixup_alpha, cutmix_alpha=params.cutmix_alpha, num_classes=params.num_classes, use_v2=False)
