@@ -93,8 +93,8 @@ def get_data_loaders(batch_size, persistent_workers=True, shuffle_val=False):
     else:
         collate_fn = default_collate
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=10, pin_memory=True, persistent_workers=persistent_workers, prefetch_factor=2, collate_fn=collate_fn)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=shuffle_val, num_workers=4, pin_memory=True, persistent_workers=persistent_workers, prefetch_factor=2)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=10, pin_memory=True, persistent_workers=persistent_workers, collate_fn=collate_fn)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=shuffle_val, num_workers=2, pin_memory=True, persistent_workers=persistent_workers)
 
     # # display some image samples in results/augmented_images.png
     # sample_imgs, _ = next(iter(train_loader))
@@ -125,23 +125,26 @@ def train_one_epoch(train_loader, model, criterion, optimizer, device, scaler, l
         with torch.amp.autocast('cuda'):
             output = model(imgs)
             loss = criterion(output, labels)
+            loss = loss / params.acccumulation_steps # normalize loss to account for gradient accumulation
 
-        optimizer.zero_grad(set_to_none=True)
-        scaler.scale(loss).backward()
-        if params.clip_grad_norm is not None:
-            scaler.unscale_(optimizer) # we should unscale the gradients of optimizer's assigned params if do gradient clipping
-            torch.nn.utils.clip_grad_norm_(model.parameters(), params.clip_grad_norm)
-        scaler.step(optimizer)
-        scaler.update()
+        scaler.scale(loss).backward() # accumulate gradients
 
-        total_loss += loss.item() * imgs.size(0)
+        if (i+1) % params.acccumulation_steps == 0 or (i+1) == len(train_loader):
+            if params.clip_grad_norm is not None:
+                scaler.unscale_(optimizer) # we should unscale the gradients of optimizer's assigned params if do gradient clipping
+                torch.nn.utils.clip_grad_norm_(model.parameters(), params.clip_grad_norm)
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad(set_to_none=True)
+
+        total_loss += loss.item() * params.acccumulation_steps * imgs.size(0)
         total_samples += labels.size(0)
         total_pruning_ratio += get_attention_pruning_metrics(model)
         total_batches += 1
 
         # send batch loss to W&B occasionally
         if (i+1) % log_interval == 0:
-            wandb.log({"batch_train_loss": loss.item()})
+            wandb.log({"batch_train_loss": loss.item() * params.acccumulation_steps})
 
     avg_loss = total_loss / total_samples
     avg_pruning_ratio = total_pruning_ratio / total_batches
