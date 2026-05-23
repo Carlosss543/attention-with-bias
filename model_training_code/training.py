@@ -12,7 +12,7 @@ print(f"Device: {device}:{torch.cuda.current_device()} {torch.cuda.get_device_na
 
 
 # --- load model ---
-model = custom_vit_t_16(num_classes=params.num_classes, image_size=params.crop_size, use_bias=params.use_bias, bias_only=params.bias_only, bias_topk=params.bias_topk, bias_score_threshold=params.bias_score_threshold).to(device)
+model = custom_vit_s_16(num_classes=params.num_classes, image_size=params.crop_size, use_bias=params.use_bias, bias_only=params.bias_only, bias_topk=params.bias_topk, bias_score_threshold=params.bias_score_threshold).to(device)
 model = torch.compile(model)
 print(f"Custom ViT number of parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.4f}M")
 
@@ -43,7 +43,7 @@ run = wandb.init(
     dir="./wandb_logs",
     config=config,
     group=f"{params.dataset_name}",
-    mode="disabled"  # online/disabled
+    mode="online"  # online/disabled
 )
 
 

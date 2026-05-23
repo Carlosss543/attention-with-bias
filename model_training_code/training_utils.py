@@ -93,8 +93,8 @@ def get_data_loaders(batch_size, persistent_workers=True, shuffle_val=False):
     else:
         collate_fn = default_collate
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=12, pin_memory=True, persistent_workers=persistent_workers, collate_fn=collate_fn)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=shuffle_val, num_workers=4, pin_memory=True, persistent_workers=persistent_workers)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=10, pin_memory=True, persistent_workers=persistent_workers, prefetch_factor=2, collate_fn=collate_fn)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=shuffle_val, num_workers=4, pin_memory=True, persistent_workers=persistent_workers, prefetch_factor=2)
 
     # # display some image samples in results/augmented_images.png
     # sample_imgs, _ = next(iter(train_loader))
