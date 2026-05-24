@@ -1,5 +1,5 @@
-dataset_name = "ImageNet100"
-num_classes = 100
+dataset_name = "ImageNet1k"
+num_classes = 1000
 
 resize_size = 256
 crop_size = 224
@@ -24,8 +24,9 @@ bias_only = None
 bias_topk = None
 bias_score_threshold = None
 
-checkpoints_interval = 10
-folder_number = 11
+checkpoints_interval = 5
+folder_number = 16
 
-resume_from_checkpoint = False
-checkpoint_path = "training_checkpoints/checkpoint11/vit_custom_epoch_3.pth"
+resume_from_checkpoint = True
+checkpoint_path = "training_checkpoints/checkpoint16/vit_custom_epoch_55.pth"
+wandb_run_id = "i9vptm6t"
