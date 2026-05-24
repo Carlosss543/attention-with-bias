@@ -90,7 +90,6 @@ run = wandb.init(
     config=config,
     group=f"{params.dataset_name}",
     mode="online" if master_process else "disabled",  # online/disabled
-    resume="allow" if params.resume_from_checkpoint else False,
 )
 
 
