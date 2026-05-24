@@ -1,5 +1,7 @@
 from torchvision import transforms, datasets
 from torch.utils.data import DataLoader, Dataset
+from torch.utils.data.distributed import DistributedSampler
+import torch.distributed as dist
 from PIL import Image
 import pandas as pd
 import os
@@ -14,7 +16,8 @@ import model_training_code.training_parameters as params
 
 
 def get_attention_pruning_metrics(model):
-    base_model = model._orig_mod if hasattr(model, "_orig_mod") else model
+    base_model = model.module if hasattr(model, "module") else model
+    base_model = base_model._orig_mod if hasattr(base_model, "_orig_mod") else base_model
 
     pruned_ratios = []
     for module in base_model.modules():
@@ -57,7 +60,7 @@ class ImageNetVal(Dataset):
         return image, label
 
 
-def get_data_loaders(batch_size, persistent_workers=True, shuffle_val=False):
+def get_data_loaders(batch_size, persistent_workers=True, shuffle_val=False, ddp=False, rank=0, world_size=1):
 
     mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]  # mean and std for ImageNet
 
@@ -77,8 +80,8 @@ def get_data_loaders(batch_size, persistent_workers=True, shuffle_val=False):
     ])
 
     if params.dataset_name == "ImageNet100":
-        train_dataset = datasets.ImageFolder("/data_fast/data_charles/imagenet100/train", transform=train_transform)
-        val_dataset = datasets.ImageFolder("/data_fast/data_charles/imagenet100/val", transform=val_transform)
+        train_dataset = datasets.ImageFolder("data/imagenet100/train", transform=train_transform)
+        val_dataset = datasets.ImageFolder("data/imagenet100/val", transform=val_transform)
     elif params.dataset_name == "ImageNet1k":
         train_dataset = datasets.ImageFolder("/data_fast/data_charles/imagenet1k/ILSVRC/Data/CLS-LOC/train", transform=train_transform)
         val_dataset = ImageNetVal(img_dir="/data_fast/data_charles/imagenet1k/ILSVRC/Data/CLS-LOC/val", csv_path="/data_fast/data_charles/imagenet1k/LOC_val_solution.csv", synset_mapping_path="/data_fast/data_charles/imagenet1k/LOC_synset_mapping.txt", transform=val_transform)
@@ -93,8 +96,31 @@ def get_data_loaders(batch_size, persistent_workers=True, shuffle_val=False):
     else:
         collate_fn = default_collate
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=10, pin_memory=True, persistent_workers=persistent_workers, collate_fn=collate_fn)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=shuffle_val, num_workers=2, pin_memory=True, persistent_workers=persistent_workers)
+    train_sampler = None
+    val_sampler = None
+    if ddp:
+        train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=True)
+        val_sampler = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=shuffle_val)
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=train_sampler is None,
+        sampler=train_sampler,
+        num_workers=10,
+        pin_memory=True,
+        persistent_workers=persistent_workers,
+        collate_fn=collate_fn,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=shuffle_val if val_sampler is None else False,
+        sampler=val_sampler,
+        num_workers=2,
+        pin_memory=True,
+        persistent_workers=persistent_workers,
+    )
 
     # # display some image samples in results/augmented_images.png
     # sample_imgs, _ = next(iter(train_loader))
@@ -108,28 +134,34 @@ def get_data_loaders(batch_size, persistent_workers=True, shuffle_val=False):
     # plt.savefig("../results/augmented_images.png")
     # plt.close()
 
-    return train_loader, val_loader
+    return train_loader, val_loader, train_sampler, val_sampler
 
 
-def train_one_epoch(train_loader, model, criterion, optimizer, device, scaler, log_interval=10):
+def train_one_epoch(train_loader, model, criterion, optimizer, device, scaler, ddp=False, master_process=True, log_interval=10):
     model.train()
 
-    total_loss = 0.0
-    total_samples = 0
-    total_pruning_ratio = 0.0
-    total_batches = 0
+    total_loss = torch.tensor(0.0, device=device)
+    total_samples = torch.tensor(0, device=device)
+    total_pruning_ratio = torch.tensor(0.0, device=device)
+    total_batches = torch.tensor(0, device=device)
 
-    for i, (imgs, labels) in enumerate(tqdm(train_loader, total=len(train_loader), desc="Training", leave=False)):
+    for i, (imgs, labels) in enumerate(tqdm(train_loader, total=len(train_loader), desc="Training", disable=not master_process, leave=False)):
         imgs, labels = imgs.to(device), labels.to(device)
 
         with torch.amp.autocast('cuda'):
             output = model(imgs)
             loss = criterion(output, labels)
-            loss = loss / params.acccumulation_steps # normalize loss to account for gradient accumulation
+        loss = loss / params.accumulation_steps # normalize loss to account for gradient accumulation
 
-        scaler.scale(loss).backward() # accumulate gradients
+        is_accumulation_end = (i+1) % params.accumulation_steps == 0 or (i+1) == len(train_loader)
 
-        if (i+1) % params.acccumulation_steps == 0 or (i+1) == len(train_loader):
+        if ddp and not is_accumulation_end:
+            with model.no_sync():
+                scaler.scale(loss).backward() # no sync, accumulate gradients
+        else:
+            scaler.scale(loss).backward() # sync, accumulate gradients
+
+        if is_accumulation_end:
             if params.clip_grad_norm is not None:
                 scaler.unscale_(optimizer) # we should unscale the gradients of optimizer's assigned params if do gradient clipping
                 torch.nn.utils.clip_grad_norm_(model.parameters(), params.clip_grad_norm)
@@ -137,53 +169,68 @@ def train_one_epoch(train_loader, model, criterion, optimizer, device, scaler, l
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
 
-        total_loss += loss.item() * params.acccumulation_steps * imgs.size(0)
+        total_loss += loss.detach() * params.accumulation_steps * imgs.size(0)
         total_samples += labels.size(0)
         total_pruning_ratio += get_attention_pruning_metrics(model)
         total_batches += 1
 
         # send batch loss to W&B occasionally
-        if (i+1) % log_interval == 0:
-            wandb.log({"batch_train_loss": loss.item() * params.acccumulation_steps})
+        if master_process and (i+1) % log_interval == 0:
+            wandb.log({"batch_train_loss": loss.detach().item() * params.accumulation_steps})
 
-    avg_loss = total_loss / total_samples
-    avg_pruning_ratio = total_pruning_ratio / total_batches
+    if ddp:
+        dist.all_reduce(total_loss, op=dist.ReduceOp.SUM)
+        dist.all_reduce(total_samples, op=dist.ReduceOp.SUM)
+        dist.all_reduce(total_pruning_ratio, op=dist.ReduceOp.SUM)
+        dist.all_reduce(total_batches, op=dist.ReduceOp.SUM)
+
+    avg_loss = total_loss.item() / total_samples.item()
+    avg_pruning_ratio = total_pruning_ratio.item() / total_batches.item()
 
     current_lr = optimizer.param_groups[0]['lr']
-    wandb.log({"train_loss": avg_loss, "learning_rate": current_lr, "train_avg_pruned_ratio": avg_pruning_ratio})
+    if master_process:
+        wandb.log({"train_loss": avg_loss, "learning_rate": current_lr, "train_avg_pruned_ratio": avg_pruning_ratio})
 
 
-def val_one_epoch(val_loader, model, criterion, device, wandb_log=True):
+def val_one_epoch(val_loader, model, criterion, device, ddp=False, master_process=True, wandb_log=True):
     model.eval()
 
-    total_loss = 0.0
-    total_correct = 0
-    total_correct_top5 = 0
-    total_samples = 0
-    total_pruning_ratio = 0.0
-    total_batches = 0
+    total_loss = torch.tensor(0.0, device=device)
+    total_correct = torch.tensor(0, device=device)
+    total_correct_top5 = torch.tensor(0, device=device)
+    total_samples = torch.tensor(0, device=device)
+    total_pruning_ratio = torch.tensor(0.0, device=device)
+    total_batches = torch.tensor(0, device=device)
 
     with torch.no_grad():
-        for imgs, labels in tqdm(val_loader, total=len(val_loader), desc="Validation", leave=False):
+        for imgs, labels in tqdm(val_loader, total=len(val_loader), desc="Validation", disable=not master_process, leave=False):
             imgs, labels = imgs.to(device), labels.to(device)
 
             with torch.amp.autocast('cuda'):
                 output = model(imgs)
                 loss = criterion(output, labels)
 
-            total_loss += loss.item() * imgs.size(0)
-            total_correct += (torch.argmax(output, dim=1) == labels).sum().item()
-            total_correct_top5 += (torch.topk(output, k=5, dim=1).indices == labels.unsqueeze(1)).any(dim=1).sum().item()
+            total_loss += loss * imgs.size(0)
+            total_correct += (torch.argmax(output, dim=1) == labels).sum()
+            total_correct_top5 += (torch.topk(output, k=5, dim=1).indices == labels.unsqueeze(1)).any(dim=1).sum()
             total_samples += labels.size(0)
             total_pruning_ratio += get_attention_pruning_metrics(model)
             total_batches += 1
 
-    avg_loss = total_loss / total_samples
-    avg_acc = total_correct / total_samples
-    avg_acc_top5 = total_correct_top5 / total_samples
-    avg_pruning_ratio = total_pruning_ratio / total_batches
+    if ddp:
+        dist.all_reduce(total_loss, op=dist.ReduceOp.SUM)
+        dist.all_reduce(total_correct, op=dist.ReduceOp.SUM)
+        dist.all_reduce(total_correct_top5, op=dist.ReduceOp.SUM)
+        dist.all_reduce(total_samples, op=dist.ReduceOp.SUM)
+        dist.all_reduce(total_pruning_ratio, op=dist.ReduceOp.SUM)
+        dist.all_reduce(total_batches, op=dist.ReduceOp.SUM)
 
-    if wandb_log:
+    avg_loss = total_loss.item() / total_samples.item()
+    avg_acc = total_correct.item() / total_samples.item()
+    avg_acc_top5 = total_correct_top5.item() / total_samples.item()
+    avg_pruning_ratio = total_pruning_ratio.item() / total_batches.item()
+
+    if master_process and wandb_log:
         wandb.log({"val_loss": avg_loss, "val_acc": avg_acc, "val_acc_top5": avg_acc_top5, "val_avg_pruned_ratio": avg_pruning_ratio})
 
     return avg_loss, avg_acc, avg_acc_top5, avg_pruning_ratio
