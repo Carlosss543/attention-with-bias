@@ -97,7 +97,7 @@ class AttentionWithBias(nn.Module):
         self.bias_only = bias_only
         self.bias_topk = bias_topk
         self.bias_score_threshold = bias_score_threshold
-        self.register_buffer("last_pruned_ratio", torch.tensor(0.0), persistent=False)
+        self.register_buffer("last_pruned_ratio", torch.zeros(num_heads), persistent=False)
 
     def forward(self, x):
         B, T, C = x.shape
@@ -135,8 +135,9 @@ class AttentionWithBias(nn.Module):
                 # Apply the mask (set -inf on the columns to ignore)
                 b = torch.where(mask, b, float('-inf'))  # (B, H, T)
 
-                # Track the pruning ratio
-                self.last_pruned_ratio = 1.0 - mask.float().mean()
+                # Track per-head pruning ratio for this layer, averaged across batch and tokens.
+                pruned_ratio_per_head = 1.0 - mask.float().mean(dim=(0, 2))  # (H,)
+                self.last_pruned_ratio.copy_(pruned_ratio_per_head)
 
             if self.bias_only:
                 b = b.unsqueeze(2)  # (B, H, T) -> (B, H, 1, T)

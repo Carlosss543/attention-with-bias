@@ -17,7 +17,7 @@ params = SimpleNamespace(
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}:{torch.cuda.current_device()} {torch.cuda.get_device_name(torch.cuda.current_device())}" if torch.cuda.is_available() else "CPU")
 
-_, val_loader = get_data_loaders(batch_size=params.batch_size, persistent_workers=True, shuffle_val=True)
+_, val_loader, _, _ = get_data_loaders(batch_size=params.batch_size, persistent_workers=True, shuffle_val=True)
 
 def evaluate_pruning(file_path, values, **bias_kwargs):
     os.makedirs(os.path.dirname(file_path), exist_ok=True) # Ensure the directory exists
@@ -55,13 +55,15 @@ def evaluate_pruning(file_path, values, **bias_kwargs):
             print(f"Threshold: {threshold_mean:.3f}, Top-1 Accuracy: {avg_acc:.4f}, Top-5 Accuracy: {avg_acc_top5:.4f}, Pruned Ratio: {avg_pruned_ratio:.4f}")
 
 
-# Generating random values for pruning
-pruning_thresholds = []
-values_range = torch.arange(0.5, 1.05, 0.05)
-for i in range(100):
-    random_indices = torch.randint(0, len(values_range), (12,))
-    samples = values_range[random_indices]
-    pruning_thresholds.append(samples.tolist())
+# Generating values for pruning
+pruning_thresholds = [[1.0]*6 + [0.9]*6, [1.0]*6 + [0.8]*6, [1.0]*6 + [0.7]*6, [1.0]*6 + [0.6]*6, [1.0]*6 + [0.5]*6]
+
+# # generate random thresholds for more variability
+# values_range = torch.arange(0.2, 1.05, 0.05)
+# for i in range(10):
+#     random_indices = torch.randint(0, len(values_range), (12,))
+#     samples = values_range[random_indices]
+#     pruning_thresholds.append(samples.tolist())
 
 method = "bias_score_threshold"
 evaluate_pruning(f"./results/pruning_graphs/{method}.csv", pruning_thresholds, bias_score_threshold=True)
