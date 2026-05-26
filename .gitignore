@@ -15,3 +15,5 @@ training_checkpoints/*
 
 wandb_logs/*
 !wandb_logs/.gitkeep
+
+job_script.sh
