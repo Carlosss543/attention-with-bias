@@ -3,7 +3,7 @@ import torch
 from types import SimpleNamespace
 import csv
 from statistics import mean
-from custom_vision_transformer import custom_vit_s_16
+from custom_vision_transformer import custom_vit_t_16, custom_vit_s_16
 from model_analysis_code.utils import convert_qkv_to_q_k_v
 from model_training_code.training_utils import val_one_epoch, get_data_loaders
 
@@ -11,7 +11,7 @@ params = SimpleNamespace(
     num_classes=100,
     img_size=224,
     batch_size=128,
-    checkpoint_path="training_checkpoints/checkpoint1/vit_custom_epoch_200.pth"
+    checkpoint_path="training_checkpoints/checkpoint12/vit_custom_epoch_300.pth"
 )
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -38,7 +38,7 @@ def evaluate_pruning(file_path, values, **bias_kwargs):
             kwargs = dict(num_classes=params.num_classes, image_size=params.img_size, use_bias=True, bias_only=None, bias_topk=None, bias_score_threshold=None)
             kwargs[bias_key] = threshold
 
-            model = custom_vit_s_16(**kwargs).to(device)
+            model = custom_vit_t_16(**kwargs).to(device)
             checkpoint = torch.load(params.checkpoint_path, map_location=device)
             checkpoint = checkpoint["model_state_dict"]
             checkpoint = convert_qkv_to_q_k_v(checkpoint)
@@ -56,7 +56,14 @@ def evaluate_pruning(file_path, values, **bias_kwargs):
 
 
 # Generating values for pruning
-pruning_thresholds = [[1.0]*6 + [0.9]*6, [1.0]*6 + [0.8]*6, [1.0]*6 + [0.7]*6, [1.0]*6 + [0.6]*6, [1.0]*6 + [0.5]*6]
+
+# pruning_thresholds = [[1.0]*12, [0.95]*12, [0.9]*12, [0.85]*12, [0.8]*12, [0.75]*12, [0.7]*12,
+#                       [1.0]*6 + [0.95]*6, [1.0]*6 + [0.9]*6, [1.0]*6 + [0.8]*6, [1.0]*6 + [0.7]*6, [1.0]*6 + [0.6]*6, [1.0]*6 + [0.5]*6, [1.0]*6 + [0.4]*6, [1.0]*6 + [0.3]*6, [1.0]*6 + [0.2]*6,
+#                       torch.linspace(1.0, 0.95, steps=12).tolist(), torch.linspace(1.0, 0.9, steps=12).tolist(), torch.linspace(1.0, 0.8, steps=12).tolist(), torch.linspace(1.0, 0.7, steps=12).tolist(), torch.linspace(1.0, 0.6, steps=12).tolist(), torch.linspace(1.0, 0.5, steps=12).tolist(), torch.linspace(1.0, 0.4, steps=12).tolist(), torch.linspace(1.0, 0.3, steps=12).tolist()]
+
+pruning_thresholds = [[1.0]*12, [0.95]*12, [0.9]*12, [0.85]*12, [0.8]*12, [0.75]*12, [0.7]*12, [0.65]*12, [0.6]*12, [0.55]*12, [0.5]*12, [0.45]*12, [0.4]*12,
+                      [1.0]*6 + [0.9]*6, [1.0]*6 + [0.8]*6, [1.0]*6 + [0.7]*6, [1.0]*6 + [0.6]*6, [1.0]*6 + [0.5]*6, [1.0]*6 + [0.4]*6, [1.0]*6 + [0.3]*6, [1.0]*6 + [0.2]*6, [1.0]*6 + [0.1]*6,
+                      torch.linspace(1.0, 0.9, steps=12).tolist(), torch.linspace(1.0, 0.8, steps=12).tolist(), torch.linspace(1.0, 0.7, steps=12).tolist(), torch.linspace(1.0, 0.6, steps=12).tolist(), torch.linspace(1.0, 0.5, steps=12).tolist(), torch.linspace(1.0, 0.4, steps=12).tolist(), torch.linspace(1.0, 0.3, steps=12).tolist(), torch.linspace(1.0, 0.2, steps=12).tolist(), torch.linspace(1.0, 0.1, steps=12).tolist()]
 
 # # generate random thresholds for more variability
 # values_range = torch.arange(0.2, 1.05, 0.05)
@@ -65,5 +72,5 @@ pruning_thresholds = [[1.0]*6 + [0.9]*6, [1.0]*6 + [0.8]*6, [1.0]*6 + [0.7]*6, [
 #     samples = values_range[random_indices]
 #     pruning_thresholds.append(samples.tolist())
 
-method = "bias_score_threshold"
-evaluate_pruning(f"./results/pruning_graphs/{method}.csv", pruning_thresholds, bias_score_threshold=True)
+method = "bias_topk"
+evaluate_pruning(f"./results/pruning_graphs/{method}.csv", pruning_thresholds, bias_topk=True)
