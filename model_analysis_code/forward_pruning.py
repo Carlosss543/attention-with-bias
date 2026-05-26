@@ -57,11 +57,11 @@ def evaluate_pruning(file_path, values, **bias_kwargs):
 
 # Generating values for pruning
 
-# pruning_thresholds = [[1.0]*12, [0.95]*12, [0.9]*12, [0.85]*12, [0.8]*12, [0.75]*12, [0.7]*12,
+# pruning_score_thresholds = [#[1.0]*12, [0.95]*12, [0.9]*12, [0.85]*12, [0.8]*12, [0.75]*12, [0.7]*12,
 #                       [1.0]*6 + [0.95]*6, [1.0]*6 + [0.9]*6, [1.0]*6 + [0.8]*6, [1.0]*6 + [0.7]*6, [1.0]*6 + [0.6]*6, [1.0]*6 + [0.5]*6, [1.0]*6 + [0.4]*6, [1.0]*6 + [0.3]*6, [1.0]*6 + [0.2]*6,
 #                       torch.linspace(1.0, 0.95, steps=12).tolist(), torch.linspace(1.0, 0.9, steps=12).tolist(), torch.linspace(1.0, 0.8, steps=12).tolist(), torch.linspace(1.0, 0.7, steps=12).tolist(), torch.linspace(1.0, 0.6, steps=12).tolist(), torch.linspace(1.0, 0.5, steps=12).tolist(), torch.linspace(1.0, 0.4, steps=12).tolist(), torch.linspace(1.0, 0.3, steps=12).tolist()]
 
-pruning_thresholds = [[1.0]*12, [0.95]*12, [0.9]*12, [0.85]*12, [0.8]*12, [0.75]*12, [0.7]*12, [0.65]*12, [0.6]*12, [0.55]*12, [0.5]*12, [0.45]*12, [0.4]*12,
+pruning_topk_thresholds = [[1.0]*12, [0.95]*12, [0.9]*12, [0.85]*12, [0.8]*12, [0.75]*12, [0.7]*12, [0.65]*12, [0.6]*12, [0.55]*12, [0.5]*12, [0.45]*12, [0.4]*12,
                       [1.0]*6 + [0.9]*6, [1.0]*6 + [0.8]*6, [1.0]*6 + [0.7]*6, [1.0]*6 + [0.6]*6, [1.0]*6 + [0.5]*6, [1.0]*6 + [0.4]*6, [1.0]*6 + [0.3]*6, [1.0]*6 + [0.2]*6, [1.0]*6 + [0.1]*6,
                       torch.linspace(1.0, 0.9, steps=12).tolist(), torch.linspace(1.0, 0.8, steps=12).tolist(), torch.linspace(1.0, 0.7, steps=12).tolist(), torch.linspace(1.0, 0.6, steps=12).tolist(), torch.linspace(1.0, 0.5, steps=12).tolist(), torch.linspace(1.0, 0.4, steps=12).tolist(), torch.linspace(1.0, 0.3, steps=12).tolist(), torch.linspace(1.0, 0.2, steps=12).tolist(), torch.linspace(1.0, 0.1, steps=12).tolist()]
 
@@ -72,5 +72,5 @@ pruning_thresholds = [[1.0]*12, [0.95]*12, [0.9]*12, [0.85]*12, [0.8]*12, [0.75]
 #     samples = values_range[random_indices]
 #     pruning_thresholds.append(samples.tolist())
 
-method = "bias_topk"
-evaluate_pruning(f"./results/pruning_graphs/{method}.csv", pruning_thresholds, bias_topk=True)
+method = "bias_topk_threshold"
+evaluate_pruning(f"./results/pruning_graphs/{method}.csv", pruning_topk_thresholds, bias_topk=True)
