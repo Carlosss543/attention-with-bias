@@ -1,5 +1,5 @@
-dataset_name = "ImageNet1k"
-num_classes = 1000
+dataset_name = "ImageNet100"
+num_classes = 100
 
 resize_size = 256
 crop_size = 224
@@ -19,14 +19,14 @@ cutmix_alpha = 1.0
 clip_grad_norm = 1.0
 
 model_type = "custom_vit_s_16"
-use_bias = False
+use_bias = True
 bias_only = None
-bias_topk = None
+bias_topk = [0.3]*12
 bias_score_threshold = None
 
-checkpoints_interval = 5
-folder_number = 16
+checkpoints_interval = None
+folder_number = 20
 
-resume_from_checkpoint = True
-checkpoint_path = "training_checkpoints/checkpoint16/vit_custom_epoch_55.pth"
-wandb_run_id = "i9vptm6t"
+resume_from_checkpoint = False
+checkpoint_path = None
+wandb_run_id = None

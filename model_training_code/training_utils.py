@@ -80,8 +80,8 @@ def get_data_loaders(batch_size, persistent_workers=True, shuffle_val=False, ddp
     ])
 
     if params.dataset_name == "ImageNet100":
-        train_dataset = datasets.ImageFolder("/home/cherr-24/projets/attention-with-bias/data/imagenet100/train", transform=train_transform)
-        val_dataset = datasets.ImageFolder("/home/cherr-24/projets/attention-with-bias/data/imagenet100/val", transform=val_transform)
+        train_dataset = datasets.ImageFolder("/data_fast/data_charles/imagenet100/train", transform=train_transform)
+        val_dataset = datasets.ImageFolder("/data_fast/data_charles/imagenet100/val", transform=val_transform)
     elif params.dataset_name == "ImageNet1k":
         train_dataset = datasets.ImageFolder("/data_fast/data_charles/imagenet1k/ILSVRC/Data/CLS-LOC/train", transform=train_transform)
         val_dataset = ImageNetVal(img_dir="/data_fast/data_charles/imagenet1k/ILSVRC/Data/CLS-LOC/val", csv_path="/data_fast/data_charles/imagenet1k/LOC_val_solution.csv", synset_mapping_path="/data_fast/data_charles/imagenet1k/LOC_synset_mapping.txt", transform=val_transform)
@@ -107,7 +107,7 @@ def get_data_loaders(batch_size, persistent_workers=True, shuffle_val=False, ddp
         batch_size=batch_size,
         shuffle=train_sampler is None,
         sampler=train_sampler,
-        num_workers=10,
+        num_workers=8,
         pin_memory=True,
         persistent_workers=persistent_workers,
         collate_fn=collate_fn,
